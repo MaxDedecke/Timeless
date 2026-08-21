@@ -11,20 +11,27 @@ import {
 const router = Router();
 
 // POST /api/rooms – Raum mit Name, Standortreferenz (locationId) und
-// Kapazität anlegen. Die Pflichtfeld-Validierung liegt im Service; Verstöße
-// kommen als ValidationError an und führen unten zu 400 + Fehlermeldung.
+// Kapazität anlegen, optional bereits mit Ausstattungsmerkmalen (amenities
+// als Liste von Katalog-Schlüsseln). Die Validierung liegt im Service;
+// Verstöße kommen als ValidationError an und führen unten zu 400.
 router.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = req.body ?? {};
     res.status(201).json(
-      await createRoom(body.name, body.locationId, body.capacity)
+      await createRoom(
+        body.name,
+        body.locationId,
+        body.capacity,
+        body.amenities
+      )
     );
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/rooms – alle Räume auflisten, je Raum inklusive Standort-Objekt.
+// GET /api/rooms – alle Räume auflisten, je Raum inklusive Standort-Objekt
+// und zugeordneter Ausstattungsmerkmale.
 router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
   try {
     res.json(await listRooms());
@@ -33,7 +40,7 @@ router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// GET /api/rooms/:id – einen Raum lesen (Nachweis-Pfad des Änderungs-Tickets).
+// GET /api/rooms/:id – einen Raum lesen (Raumdetail inklusive Merkmale).
 router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     res.json(await getRoom(req.params.id));
