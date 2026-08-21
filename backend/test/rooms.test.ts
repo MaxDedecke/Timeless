@@ -57,13 +57,23 @@ test("PATCH /api/rooms/:id mit explizit geleertem Pflichtfeld wird mit 400 abgel
 });
 
 test("PATCH /api/rooms/:id mit leerem Körper ändert nichts (keine Validierungsfehler)", async () => {
-  // Ohne Felder gibt es nichts zu validieren – der Fall läuft in den
-  // Datenbankteil und wird dort nur ausgeführt, wenn eine DB erreichbar ist;
-  // hier geht es nur darum, dass die Route die Anfrage grundsätzlich annimmt.
-  // Ohne DB schlägt der Aufruf mit einem Verbindungsfehler (500) fehl – das
-  // ist dann erwartbar und kein Validierungsproblem.
+  // Ohne Felder gibt es nichts zu validieren – hier geht es nur darum, dass
+  // die Route die Anfrage grundsätzlich annimmt und keinen Pflichtfeld-Verstoß
+  // meldet. Je nach Umfeld existiert der Raum mit ID 1 (200), existiert er
+  // nicht (404 – DB erreichbar, Tabelle leer) oder ist die DB unerreichbar
+  // (500) – beides kein Validierungsproblem. Nur im 404-Fall kommt eine
+  // verständliche JSON-Fehlermeldung aus unserem Router zurück.
   const res = await request(app).patch("/api/rooms/1").send({});
-  assert.ok([200, 500].includes(res.status));
+  assert.ok(
+    [200, 404, 500].includes(res.status),
+    `Unerwarteter Status ${res.status} für leeres PATCH`
+  );
+  if (res.status === 404) {
+    assert.ok(
+      typeof res.body?.error === "string" && res.body.error.length > 0,
+      "404 ohne verständliche Fehlermeldung"
+    );
+  }
 });
 
 test("GET /api/rooms/:id mit nicht-numerischer ID liefert 404 ohne Datenbankzugriff", async () => {

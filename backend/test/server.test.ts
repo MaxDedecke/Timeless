@@ -1,8 +1,22 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import request from "supertest";
-import app from "../src/server.js";
-import { pool } from "../src/db.js";
+
+// Diese Suite prüft das Verhalten bei NICHT erreichbarer Datenbank – das soll
+// in jedem Umfeld gelten, auch im Backend-Container, wo über den
+// Compose-Servicenamen sehr wohl eine Postgres erreichbar sein kann. Damit der
+// Fall deterministisch bleibt, zeigt der Pool dieser Suite bewusst auf eine
+// Loopback-Adresse, auf der nichts lauscht (die Verbindung wird sofort
+// abgewiesen). Die Variablen müssen gesetzt sein, BEVOR db.ts den Pool baut –
+// deshalb werden App und Pool hier dynamisch importiert statt oben statisch.
+// dotenv überschreibt bereits gesetzte Env-Variablen nicht, die Werte gelten
+// also auch dann, wenn eine .env oder die Container-Umgebung etwas anderes
+// enthält.
+process.env.PGHOST = "127.0.0.1";
+process.env.PGPORT = "1";
+
+const { default: app } = await import("../src/server.js");
+const { pool } = await import("../src/db.js");
 
 after(async () => {
   // Pool schließen, damit der Testlauf sauber endet.
