@@ -49,9 +49,9 @@ type LoadState =
   | { phase: "empty" }
   | { phase: "ready"; rooms: Room[] };
 
-async function fetchRooms(): Promise<Room[]> {
+async function fetchRooms(signal?: AbortSignal): Promise<Room[]> {
   // Bewusst relativ: derselbe Ursprung, unter dem diese Seite läuft.
-  const res = await fetch("/api/rooms");
+  const res = await fetch("/api/rooms", { signal });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
   }
@@ -200,7 +200,7 @@ export default function RoomList() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const rooms = await fetchRooms();
+      const rooms = await fetchRooms(signal);
       setState(rooms.length === 0 ? { phase: "empty" } : { phase: "ready", rooms });
     } catch (err) {
       if ((err as Error)?.name === "AbortError") return; // Unmount/Neuladen

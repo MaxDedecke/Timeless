@@ -83,11 +83,17 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 interface SidebarProps {
   /** Off-Canvas auf schmalen Breiten: offen? */
   mobileOpen: boolean;
+  /** Öffnet das mobile Panel per Burger-Trigger. */
+  onMobileOpen: () => void;
   /** Schließt das mobile Panel (X, Overlay-Klick, Esc oder Navigation). */
   onMobileClose: () => void;
 }
 
-export default function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
+export default function Sidebar({
+  mobileOpen,
+  onMobileOpen,
+  onMobileClose,
+}: SidebarProps) {
   return (
     <>
       {/* Desktop: fixierte Seitenleiste ab lg */}
@@ -105,7 +111,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
           aria-expanded={mobileOpen}
           aria-controls="mobile-navigation"
           data-testid="sidebar-trigger"
-          onClick={onMobileClose}
+          onClick={onMobileOpen}
         >
           <Menu className="h-5 w-5" aria-hidden="true" />
         </Button>

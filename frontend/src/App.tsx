@@ -104,7 +104,11 @@ function Shell() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+      <Sidebar
+        mobileOpen={mobileOpen}
+        onMobileOpen={() => setMobileOpen(true)}
+        onMobileClose={() => setMobileOpen(false)}
+      />
       {/* Ab lg Platz für die fixierte Sidebar (w-64) */}
       <main className="px-4 py-6 md:px-6 lg:ml-64 lg:pl-8 lg:pr-6 xl:px-8">
         <div className="mx-auto max-w-7xl">

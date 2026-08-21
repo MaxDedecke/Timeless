@@ -1,6 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 
-import { render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -62,6 +67,9 @@ function fetchFail() {
 }
 
 afterEach(() => {
+  // cleanup() ist nötig, weil vitest mit globals:false läuft und
+  // @testing-library/react daher kein Auto-Cleanup registriert.
+  cleanup();
   vi.restoreAllMocks();
 });
 
@@ -107,7 +115,7 @@ describe("RoomList – Zustände", () => {
     global.fetch = fetchOk([]);
     render(<RoomList />);
 
-    const empty = await screen.findByRole("note");
+    const empty = await screen.findByTestId("rooms-empty");
     expect(empty).toHaveTextContent("Es sind noch keine Räume angelegt.");
     expect(screen.queryByTestId("rooms-grid")).not.toBeInTheDocument();
   });
@@ -123,7 +131,8 @@ describe("RoomList – Zustände", () => {
     // Erneut versuchen: nächster Versuch erfolgreich → Liste erscheint.
     global.fetch = fetchOk(ROOMS);
     await user.click(screen.getByTestId("rooms-retry"));
-    await screen.findByText("Atelier Nord");
+    const grid = await screen.findByTestId("rooms-grid");
+    expect(within(grid).getAllByTestId("room-card")).toHaveLength(2);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

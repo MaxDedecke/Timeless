@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -53,6 +59,9 @@ function mockBackend(rooms?: { status?: number; body?: unknown }) {
 }
 
 afterEach(() => {
+  // cleanup() ist nötig, weil vitest mit globals:false läuft und
+  // @testing-library/react daher kein Auto-Cleanup registriert.
+  cleanup();
   vi.restoreAllMocks();
   window.history.pushState({}, "", "/");
 });
@@ -91,7 +100,8 @@ describe("App-Shell", () => {
     ).not.toHaveAttribute("aria-current");
 
     // Nur relative /api-Pfade, keine Servicename-Hosts im Client-Fetch.
-    expect(backend).toHaveBeenCalledWith("/api/rooms");
+    // (fetch erhält zusätzlich das AbortSignal aus dem useEffect-Cleanup.)
+    expect(backend).toHaveBeenCalledWith("/api/rooms", expect.anything());
     const card = await screen.findByText("Atelier Nord");
     expect(card).toBeInTheDocument();
     expect(screen.getByText("Werkhaus")).toBeInTheDocument();
