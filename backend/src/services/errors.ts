@@ -1,0 +1,13 @@
+/**
+ * Fachfehler der Services-Schicht – die Router übersetzen sie in Statuscodes:
+ * ValidationError -> 400, DomainNotFoundError -> 404.
+ *
+ * Eigene Datei, damit sich Services gegenseitig die Fehlerklasse importieren
+ * können, ohne einen Import-Zirkel zu erzeugen (rooms <-> amenities).
+ */
+
+/** Fachliche Regel verletzt (HTTP 400). */
+export class ValidationError extends Error {}
+
+/** Objekt nicht vorhanden (HTTP 404). */
+export class DomainNotFoundError extends Error {}
