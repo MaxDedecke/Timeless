@@ -1,12 +1,39 @@
 import { NextFunction, Request, Response, Router } from "express";
 import { DomainNotFoundError as NotFoundError, ValidationError } from "../services/errors.js";
-import { getRoom, RoomChangeInput, updateRoom } from "../services/rooms.js";
+import {
+  createRoom,
+  getRoom,
+  listRooms,
+  RoomChangeInput,
+  updateRoom,
+} from "../services/rooms.js";
 
 const router = Router();
 
-// GET /api/rooms/:id – einen Raum lesen. Minimaler Lesepfad dieses Tickets,
-// damit das Akzeptanzkriterium "Änderung ist danach über GET sichtbar"
-// prüfbar ist; Anlegen und Raumliste kommen in eigenen Tickets.
+// POST /api/rooms – Raum mit Name, Standortreferenz (locationId) und
+// Kapazität anlegen. Die Pflichtfeld-Validierung liegt im Service; Verstöße
+// kommen als ValidationError an und führen unten zu 400 + Fehlermeldung.
+router.post("/", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body ?? {};
+    res.status(201).json(
+      await createRoom(body.name, body.locationId, body.capacity)
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/rooms – alle Räume auflisten, je Raum inklusive Standort-Objekt.
+router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await listRooms());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/rooms/:id – einen Raum lesen (Nachweis-Pfad des Änderungs-Tickets).
 router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     res.json(await getRoom(req.params.id));

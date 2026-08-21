@@ -1,18 +1,16 @@
 import { PoolClient } from "pg";
 import { pool } from "../db.js";
 import { DomainNotFoundError, ValidationError } from "./errors.js";
+import type { Location } from "./locations.js";
 
 /**
- * Räume: einen Raum lesen und ändern (Name, Standort, Kapazität).
+ * Räume: anlegen, lesen (einzeln und Liste) und ändern.
  *
- * Die Pflichtfeld-Regeln entsprechen denen des Anlegens (Anforderung 1):
+ * Pflichtfeld-Regeln (Anforderung 1):
  * - Name nicht leer,
  * - Standort muss als verwaltetes Objekt existieren (Beschluss 21.8.2026 –
  *   kein Freitext-Feld),
  * - Kapazität ganzzahlig größer 0.
- *
- * Anlegen (POST) und Raumliste gehören in eigene Tickets und sind hier
- * bewusst nicht enthalten.
  */
 
 export interface Room {
@@ -38,6 +36,22 @@ const ROOM_SELECT = `
          location_id::int AS "locationId",
          capacity
   FROM rooms`;
+
+/** Raum inklusive des zugeordneten Standorts (für die Raumliste). */
+export interface RoomWithLocation extends Room {
+  location: Location;
+}
+
+// Join über locations: GET /api/rooms liefert je Raum den Standort als
+// eingebettetes Objekt mit (Akzeptanzkriterium dieses Tickets).
+const ROOM_WITH_LOCATION_SELECT = `
+  SELECT rooms.id::int AS id,
+         rooms.name AS name,
+         rooms.location_id::int AS "locationId",
+         rooms.capacity,
+         jsonb_build_object('id', locations.id::int, 'name', locations.name) AS location
+  FROM rooms
+  JOIN locations ON locations.id = rooms.location_id`;
 
 function parseRoomId(raw: unknown): number {
   const id = Number(raw);
@@ -74,6 +88,73 @@ function validateLocationId(raw: unknown): number {
     throw new ValidationError("Ein Raum benötigt einen Standort.");
   }
   return value;
+}
+
+/**
+ * Listet alle Räume inklusive ihres Standorts, sortiert nach Raumname.
+ * (GET /api/rooms – Akzeptanzkriterium: „liefert je Raum den zugeordneten
+ * Standort mit".)
+ */
+export async function listRooms(): Promise<RoomWithLocation[]> {
+  const { rows } = await pool.query<RoomWithLocation>(
+    `${ROOM_WITH_LOCATION_SELECT} ORDER BY rooms.name`
+  );
+  return rows;
+}
+
+/**
+ * Legt einen Raum an. Wirft ValidationError (400) bei Pflichtfeld-Verstößen –
+ * auch dann, wenn der angegebene Standort nicht existiert; das ist ein
+ * Validierungsfehler des Clients, kein fehlender Raum.
+ */
+export async function createRoom(
+  rawName: unknown,
+  rawLocationId: unknown,
+  rawCapacity: unknown
+): Promise<RoomWithLocation> {
+  const name = validateName(rawName);
+  const locationId = validateLocationId(rawLocationId);
+  const capacity = validateCapacity(rawCapacity);
+
+  // Validierung und Einfügen in einer Transaktion: Der Standort-Check ist ein
+  // fachlicher Test vor dem INSERT, damit der Client eine verständliche
+  // Meldung erhält statt eines rohen Datenbankfehlers (SQLSTATE 23503).
+  const client: PoolClient = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rowCount } = await client.query("SELECT 1 FROM locations WHERE id = $1", [
+      locationId,
+    ]);
+    if (rowCount === 0) {
+      throw new ValidationError("Der angegebene Standort existiert nicht.");
+    }
+
+    const inserted = await client.query<{ id: number }>(
+      `INSERT INTO rooms (name, location_id, capacity)
+       VALUES ($1, $2, $3)
+       RETURNING id::int AS id,
+                 name,
+                 location_id::int AS "locationId",
+                 capacity`,
+      [name, locationId, capacity]
+    );
+
+    // Standort-Objekt für die Antwort nachladen (Standort wurde soeben als
+    // existierend geprüft, der Join kann also nicht leer sein).
+    const { rows: withLocation } = await client.query<RoomWithLocation>(
+      `${ROOM_WITH_LOCATION_SELECT} WHERE rooms.id = $1`,
+      [inserted.rows[0].id]
+    );
+
+    await client.query("COMMIT");
+    return withLocation[0];
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** Liest einen einzelnen Raum; eine unbekannte ID führt zu 404. */
