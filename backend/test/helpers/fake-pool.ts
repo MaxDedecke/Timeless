@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { __restorePoolForTests, __setPoolForTests } from "../../src/db.js";
 
 /**
  * Minimaler Datenbank-Ersatz für containerlose Unit-Tests der Service-Schicht.
@@ -113,22 +114,21 @@ export class FakePool {
 }
 
 /**
- * Ersetzt für die Dauer eines Tests die Pool-Instanz im Modul ../src/db.js
- * durch einen FakePool und stellt danach den echten Zustand wieder her.
+ * Bindet den FakePool für die Dauer einer Suite an die Services an.
  *
- * Instanzbasiert (kein `--experimental-test-module-mocking`): Das db-Modul
- * exportiert `pool` als let-Bindung; der Test überschreibt sie direkt. Läuft
- * damit unter jedem Node ≥ 20, auch wenn die Runner-Flags sich zwischen
- * Versionen unterscheiden.
+ * Nutzt die explizite Test-Naht in src/db.ts (__setPoolForTests /
+ * __restorePoolForTests) – bewusst statt Node-Modul-Mocking, das nur hinter
+ * einem experimentellen Runner-Flag funktioniert. Weil `pool` eine ESM-
+ * Live-Bindung ist, sehen alle Importeure (Services, Router, App) sofort den
+ * Fake; nach `end()` wieder den echten Pool.
  *
- * Die Session zählt die verbleibenden Fakes und stellt den Original-Pool erst
- * wieder her, wenn alle Sessions beendet sind (gestapelte Nutzung möglich).
+ * Nutzungsmuster in einer Suite: `begin()` auf Modulebene aufrufen, NACHDEM
+ * der DB-Erreichbarkeits-Check den echten Pool geprüft hat (sonst läuft der
+ * Check schon gegen den Fake), aber VOR dem Registrieren der Tests.
  */
 export class FakeDbSession {
-  private static active = 0;
-  private static original: Pool | undefined;
-
   private readonly pool: FakePool;
+  private installed = false;
 
   constructor(pool?: FakePool) {
     this.pool = pool ?? new FakePool();
@@ -138,26 +138,17 @@ export class FakeDbSession {
     return this.pool;
   }
 
-  async begin(): Promise<void> {
-    const dbModule = await import("../src/db.js");
-    if (FakeDbSession.active === 0) {
-      FakeDbSession.original = dbModule.pool;
-    }
-    FakeDbSession.active += 1;
-    // let-Bindung des Moduls beschreiben – alle Importeure sehen denselben
-    // Wert (ESM-Live-Bindung).
-    (dbModule as { pool: unknown }).pool = this.pool as unknown as Pool;
+  /** Ersetzt den aktiven Pool durch den Fake. Idempotent je Session. */
+  begin(): void {
+    if (this.installed) return;
+    __setPoolForTests(this.pool as unknown as Pool);
+    this.installed = true;
   }
 
-  async end(): Promise<void> {
-    const dbModule = await import("../src/db.js");
-    // Nur zurücksetzen, wenn noch unser Fake aktiv ist.
-    if ((dbModule as { pool: unknown }).pool === this.pool) {
-      FakeDbSession.active -= 1;
-      if (FakeDbSession.active === 0) {
-        (dbModule as { pool: unknown }).pool = FakeDbSession.original!;
-        FakeDbSession.original = undefined;
-      }
-    }
+  /** Stellt den echten Pool wieder her. No-op, wenn nichts installiert war. */
+  end(): void {
+    if (!this.installed) return;
+    __restorePoolForTests();
+    this.installed = false;
   }
 }
