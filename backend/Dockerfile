@@ -19,6 +19,8 @@ COPY --from=build /app/package-lock.json ./package-lock.json
 RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
+# tsc kopiert keine .sql-Dateien – Migrationen liegen im Build daneben unter dist/db/migrations.
+COPY src/db/migrations ./dist/db/migrations
 
 EXPOSE 3000
 CMD ["node", "dist/main.js"]
