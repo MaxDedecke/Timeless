@@ -8,7 +8,20 @@ import path from "node:path";
 
 const PORT = Number(process.env.PORT ?? 80);
 const DIST = path.resolve(process.cwd(), "dist");
-const BACKEND = process.env.BACKEND_ORIGIN ?? "http://backend:3000";
+
+// Ziel des API-Reverse-Proxys kommt ausschließlich aus der Umgebung –
+// docker-compose.yml setzt BACKEND_ORIGIN auf den internen Dienstnamen.
+// Bewusst kein Fallback im Code: Läuft der Container ohne diese Variable,
+// wäre jede Weiterleitung falsch – dann lieber sofort klar abbrechen, statt
+// Anfragen still in die Irre zu leiten. Der Dienstname steht dadurch nirgends
+// im Code, sondern nur in der Compose-Verkabelung.
+const BACKEND = process.env.BACKEND_ORIGIN;
+if (!BACKEND) {
+  console.error(
+    "BACKEND_ORIGIN ist nicht gesetzt – ohne Ziel kann /api nicht weitergeleitet werden (wird in docker-compose.yml gesetzt)."
+  );
+  process.exit(1);
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
