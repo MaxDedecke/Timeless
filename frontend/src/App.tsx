@@ -1,18 +1,30 @@
 import { useEffect, useState } from "react";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
+
+import Sidebar from "./components/Sidebar";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import RoomList from "./pages/RoomList";
+
+/**
+ * App-Shell: dauerhafte Sidebar links (ab lg fixiert sichtbar, darunter
+ * Off-Canvas), Inhalt daneben. Alle Client-Fetches laufen über relative
+ * Pfade (/api/...) – der Frontend-Container reicht sie als Reverse-Proxy
+ * an das Backend im Compose-Netz weiter; im Browser-Code taucht nie ein
+ * Servicename auf.
+ */
 
 interface HealthState {
   status: string;
   database?: string;
 }
 
-/**
- * Startseite des Projektgerüsts.
- *
- * Alle Client-Fetches laufen über relative Pfade (/api/...). Der Frontend-
- * Container reicht sie als Reverse-Proxy an das Backend im Compose-Netz
- * weiter – im Browser-Code taucht nie ein Servicename auf.
- */
-export default function App() {
+function Dashboard() {
   const [health, setHealth] = useState<HealthState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,57 +47,82 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4 sm:px-6">
-          <h1 className="text-lg font-semibold tracking-tight">Timeless</h1>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            Raumbuchung · DesignFreak GmbH
-          </span>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
-        <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
-          Projektgrundgerüst steht
-        </h2>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
-          Frontend, Backend-API und PostgreSQL laufen als getrennte Container.
-          Die fachlichen Ansichten (Raumliste, Buchungskalender) folgen in den
-          nächsten Sprint-Tickets.
+    <section aria-labelledby="dashboard-heading">
+      <div className="mb-6">
+        <h1 id="dashboard-heading" className="text-2xl font-semibold tracking-tight">
+          Übersicht
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Raumliste, Tagesansicht und Buchungen folgen in den nächsten Sprints.
         </p>
+      </div>
 
-        <div className="mt-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Systemstatus
-          </h3>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Systemstatus</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm">
           {error !== null && (
             <p
               role="alert"
-              className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700"
+              className="rounded-md bg-destructive-background px-3 py-2 text-destructive"
             >
               {error}
             </p>
           )}
           {error === null && health === null && (
-            <p className="mt-3 text-sm text-slate-500">Status wird geprüft …</p>
+            <p className="text-muted-foreground">Status wird geprüft …</p>
           )}
           {error === null && health !== null && (
-            <dl className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-              <div className="flex items-center justify-between rounded-md bg-emerald-50 px-3 py-2">
-                <dt className="text-slate-600">API</dt>
-                <dd className="font-medium text-emerald-700">{health.status}</dd>
+            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="flex items-center justify-between rounded-md bg-success-background px-3 py-2">
+                <dt className="text-card-foreground">API</dt>
+                <dd className="font-medium text-success">{health.status}</dd>
               </div>
-              <div className="flex items-center justify-between rounded-md bg-emerald-50 px-3 py-2">
-                <dt className="text-slate-600">Datenbank</dt>
-                <dd className="font-medium text-emerald-700">
+              <div className="flex items-center justify-between rounded-md bg-success-background px-3 py-2">
+                <dt className="text-card-foreground">Datenbank</dt>
+                <dd className="font-medium text-success">
                   {health.database ?? "unbekannt"}
                 </dd>
               </div>
             </dl>
           )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function Shell() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
+
+  // Navigation schließt das mobile Off-Canvas-Panel.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+      {/* Ab lg Platz für die fixierte Sidebar (w-64) */}
+      <main className="px-4 py-6 md:px-6 lg:ml-64 lg:pl-8 lg:pr-6 xl:px-8">
+        <div className="mx-auto max-w-7xl">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/rooms" element={<RoomList />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         </div>
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Shell />
+    </BrowserRouter>
   );
 }
