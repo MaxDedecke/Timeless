@@ -1,12 +1,14 @@
 import express, { Request, Response } from "express";
 import { pool } from "./db.js";
 import locationsRouter from "./routes/locations.js";
+import roomsRouter from "./routes/rooms.js";
 
 const app = express();
 app.use(express.json());
 
 // Verwaltete Objekte: Standorte (Beschluss 21.8.2026 – kein Freitext-Feld).
 app.use("/api/locations", locationsRouter);
+app.use("/api/rooms", roomsRouter);
 
 // Liveness: Prozess läuft, ohne an die Datenbank gebunden zu sein.
 app.get("/api/health", (_req: Request, res: Response) => {
