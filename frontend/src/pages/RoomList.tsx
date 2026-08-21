@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Inbox, MapPin, Plus, RotateCw, Users } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  Inbox,
+  MapPin,
+  Plus,
+  RotateCw,
+  SearchX,
+  Users,
+} from "lucide-react";
 
+import { AmenityFilter } from "../components/AmenityFilter";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -80,6 +89,32 @@ function RoomsSkeleton() {
         </Card>
       ))}
     </div>
+  );
+}
+
+/**
+ * Leerzustand „keine Treffer": von „noch keine Räume" getrennt – hier gibt es
+ * Räume, aber keiner erfüllt die gewählte Merkmalskombination. Bietet den
+ * Reset als direkte Aktion an (Akzeptanzkriterium 4 des Tickets).
+ */
+function NoMatchesEmpty({ onResetFilters }: { onResetFilters: () => void }) {
+  return (
+    <Card
+      data-testid="rooms-no-match"
+      className="flex flex-col items-center justify-center px-6 py-14 text-center"
+    >
+      <SearchX className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+      <p className="mt-3 text-base font-medium text-card-foreground">
+        Keine Räume mit dieser Ausstattungskombination gefunden.
+      </p>
+      <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+        Weniger Merkmale gewählt? Setze den Filter zurück und versuche es
+        erneut.
+      </p>
+      <Button variant="outline" size="sm" className="mt-5" onClick={onResetFilters}>
+        Filter zurücksetzen
+    </Button>
+    </Card>
   );
 }
 
@@ -195,8 +230,24 @@ function PageHeader({ roomsCount }: { roomsCount: number }) {
   );
 }
 
+/**
+ * Clientseitige Filterung mit AND-Logik: Ein Raum bleibt nur stehen, wenn er
+ * ALLE gewählten Merkmale besitzt (Schnittmenge); ohne Auswahl bleiben alle
+ * Räume sichtbar. Bewusst gegen die bereits geladene Liste – laut Ticket keine
+ * Backend-Änderung.
+ */
+function filterRoomsByAmenities(rooms: Room[], selectedKeys: string[]): Room[] {
+  if (selectedKeys.length === 0) return rooms;
+  return rooms.filter((room) =>
+    selectedKeys.every((key) => room.amenities.some((a) => a.key === key)),
+  );
+}
+
 export default function RoomList() {
   const [state, setState] = useState<LoadState>({ phase: "loading" });
+  const [selectedAmenityKeys, setSelectedAmenityKeys] = useState<string[]>([]);
+
+  const resetFilters = useCallback(() => setSelectedAmenityKeys([]), []);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -219,19 +270,37 @@ export default function RoomList() {
     void load();
   }, [load]);
 
+  const visibleRooms = useMemo(
+    () =>
+      state.phase === "ready"
+        ? filterRoomsByAmenities(state.rooms, selectedAmenityKeys)
+        : [],
+    [state, selectedAmenityKeys],
+  );
+
   return (
     <section aria-labelledby="rooms-heading">
       <PageHeader roomsCount={state.phase === "ready" ? state.rooms.length : 0} />
 
+      {state.phase === "ready" && (
+        <AmenityFilter
+          selectedKeys={selectedAmenityKeys}
+          onSelectionChange={setSelectedAmenityKeys}
+        />
+      )}
+
       {state.phase === "loading" && <RoomsSkeleton />}
       {state.phase === "error" && <RoomsError onRetry={retry} />}
       {state.phase === "empty" && <RoomsEmpty onRetry={retry} />}
-      {state.phase === "ready" && (
+      {state.phase === "ready" && visibleRooms.length === 0 && (
+        <NoMatchesEmpty onResetFilters={resetFilters} />
+      )}
+      {state.phase === "ready" && visibleRooms.length > 0 && (
         <div
           data-testid="rooms-grid"
           className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
         >
-          {state.rooms.map((room) => (
+          {visibleRooms.map((room) => (
             <RoomCard key={room.id} room={room} />
           ))}
         </div>
