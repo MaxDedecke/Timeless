@@ -6,6 +6,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY tsconfig.json vite.config.ts vitest.config.ts index.html tailwind.config.js postcss.config.js ./
+# proxy.mjs wird bereits hier kopiert, damit die Laufzeit-Stufe sie per
+# COPY --from=build übernehmen kann (sonst scheitert der Image-Build).
+COPY proxy.mjs ./
 COPY src ./src
 COPY test ./test
 RUN npm run build

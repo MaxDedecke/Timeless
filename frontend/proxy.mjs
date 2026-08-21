@@ -32,9 +32,13 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname.startsWith("/api/")) {
     const target = BACKEND + url.pathname + url.search;
+    // Host-Header auf das Backend-Ziel umschreiben. Ein expliziter Wert ist
+    // Pflicht: Node wirft bei einem Header-Wert "undefined" sofort
+    // ERR_HTTP_INVALID_HEADER_VALUE und der Proxy-Request bricht ab.
+    const headers = { ...req.headers, host: new URL(target).host };
     const proxyReq = http.request(
       target,
-      { method: req.method, headers: { ...req.headers, host: undefined } },
+      { method: req.method, headers },
       (proxyRes) => {
         res.writeHead(proxyRes.statusCode, proxyRes.headers);
         proxyRes.pipe(res);
