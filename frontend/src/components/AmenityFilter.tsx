@@ -64,9 +64,8 @@ export function AmenityFilter({ selectedKeys, onSelectionChange }: AmenityFilter
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <CardTitle className="text-base font-semibold tracking-tight">
-              Nach Ausstattung filtern
-            </CardTitle>
+            {/* Typo-Stufe laut Design-Skala kommt unverändert aus ui/card */}
+            <CardTitle>Nach Ausstattung filtern</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
               Zeigt Räume, die alle gewählten Merkmale besitzen.
             </p>
