@@ -1,3 +1,58 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Design-Tokens (docs/design-konzept.md): Alle Farben zentral als CSS-
+ * Variablen, Verwendung in Komponenten ausschließlich über semantische
+ * Tailwind-Klassen (bg-primary, text-muted-foreground, ...).
+ */
+@layer base {
+  :root {
+    --background: 210 25% 97%;
+    --foreground: 213 30% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 213 30% 14%;
+
+    /* Primär "Petrol" */
+    --primary: 193 78% 26%;
+    --primary-hover: 193 78% 21%;
+    --primary-tint: 190 60% 95%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Akzent "Terrakotta" (eigene Buchungen, sparsame Hervorhebung) */
+    --accent: 16 70% 52%;
+    --accent-tint: 16 80% 95%;
+    --accent-foreground: 0 0% 100%;
+
+    --muted: 210 20% 95%;
+    --muted-foreground: 211 12% 43%;
+    --border: 210 15% 89%;
+    --input: 210 15% 85%;
+    --ring: 193 78% 26%;
+
+    /* Statusfarben: Vordergrund- und Hintergrundvariante */
+    --success: 150 62% 30%;
+    --success-background: 150 55% 94%;
+    --warning: 35 92% 40%;
+    --warning-background: 43 96% 93%;
+    --destructive: 0 66% 47%;
+    --destructive-background: 0 82% 96%;
+    --info: 210 85% 42%;
+    --info-background: 210 85% 95%;
+
+    /* Sidebar (dunkler Neutral-Ton laut Konzept) */
+    --sidebar: 213 30% 14%;
+    --sidebar-foreground: 210 20% 92%;
+
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+}
