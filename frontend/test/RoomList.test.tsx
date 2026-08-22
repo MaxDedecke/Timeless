@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 import App from "../src/App";
 import RoomList from "../src/pages/RoomList";
@@ -29,10 +30,22 @@ if (typeof window.ResizeObserver === "undefined") {
  * Raumliste: alle vier Zustände (lädt, Daten, leer, Fehler) sind erkennbar
  * gestaltet und werden hier je durch einen Test abgesichert – dazu der
  * Ausstattungsfilter (Ein-Merkmal, kombiniert AND, Zurücksetzen, keine
- * Treffer). Das Backend wird über global.fetch gemockt; die Pfad-Prüfung
- * stellt sicher, dass ausschließlich relative /api-Pfade aufgerufen werden
- * (keine Compose-Servicenamen im Browser-Code).
+ * Treffer) und der Zugang zur Raumverwaltung: „Raum anlegen" verweist auf
+ * /rooms/new, jede Raumkarte trägt einen Bearbeiten-Link /rooms/:id/edit,
+ * und nach der Rückkehr aus dem Formular zeigt die Liste den neuen bzw.
+ * geänderten Raum (Refetch beim Mount). Das Backend wird über global.fetch
+ * gemockt; die Pfad-Prüfung stellt sicher, dass ausschließlich relative
+ * /api-Pfade aufgerufen werden (keine Compose-Servicenamen im Browser-Code).
  */
+
+/** Direkte Renders von RoomList brauchen Router-Kontext für die Links. */
+function renderRoomList() {
+  return render(
+    <MemoryRouter initialEntries={["/rooms"]}>
+      <RoomList />
+    </MemoryRouter>
+  );
+}
 
 const ROOMS = [
   {
@@ -147,7 +160,7 @@ describe("RoomList – Zustände", () => {
           resolveFetch = resolve;
         })
     );
-    render(<RoomList />);
+    renderRoomList();
     // Lade-Skelett in Kartenform ist sichtbar, noch keine Raumdaten.
     expect(screen.getByTestId("rooms-loading")).toBeInTheDocument();
     expect(screen.queryByTestId("room-card")).not.toBeInTheDocument();
@@ -158,7 +171,7 @@ describe("RoomList – Zustände", () => {
   it("ruft /api/rooms relativ ab und zeigt Name, Standort, Kapazität und Ausstattung", async () => {
     const fetchMock = fetchApi();
     global.fetch = fetchMock as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
 
     const grid = await screen.findByTestId("rooms-grid");
     const cards = within(grid).getAllByTestId("room-card");
@@ -192,7 +205,7 @@ describe("RoomList – Zustände", () => {
 
   it("zeigt einen gestalteten Leerzustand bei leerer Liste", async () => {
     global.fetch = fetchWith([]) as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
 
     const empty = await screen.findByTestId("rooms-empty");
     expect(empty).toHaveTextContent("Es sind noch keine Räume angelegt.");
@@ -204,7 +217,7 @@ describe("RoomList – Zustände", () => {
   it("zeigt eine Fehlermeldung mit Erneut-versuchen bei API-Fehler", async () => {
     const user = userEvent.setup();
     global.fetch = fetchFail() as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Räume konnten nicht geladen werden");
@@ -222,7 +235,7 @@ describe("RoomList – Ausstattungsfilter", () => {
   it("zeigt bei einem gewählten Merkmal ausschließlich Räume mit dieser Ausstattung", async () => {
     const user = userEvent.setup();
     global.fetch = fetchApi() as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
     await waitForRooms(3);
 
     await user.click(screen.getByTestId("amenity-filter-beamer"));
@@ -241,7 +254,7 @@ describe("RoomList – Ausstattungsfilter", () => {
   it("schneidet bei kombinierten Merkmalen auf die Schnittmenge (AND) zurück", async () => {
     const user = userEvent.setup();
     global.fetch = fetchApi() as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
     await waitForRooms(3);
 
     await user.click(screen.getByTestId("amenity-filter-beamer"));
@@ -262,7 +275,7 @@ describe("RoomList – Ausstattungsfilter", () => {
   it("zeigt ohne Filter alle Räume und leert „Filter zurücksetzen“ die Auswahl", async () => {
     const user = userEvent.setup();
     global.fetch = fetchApi() as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
 
     // Ohne gesetzten Filter: alle drei Räume.
     await waitForRooms(3);
@@ -284,7 +297,7 @@ describe("RoomList – Ausstattungsfilter", () => {
   it("zeigt bei keinen Treffern einen verständlichen Leerzustand mit Reset", async () => {
     const user = userEvent.setup();
     global.fetch = fetchApi() as unknown as typeof global.fetch;
-    render(<RoomList />);
+    renderRoomList();
     await waitForRooms(3);
 
     // Kein Raum besitzt Videokonferenz UND Whiteboard.
@@ -308,9 +321,117 @@ describe("RoomList – Ausstattungsfilter", () => {
 });
 
 /**
+ * Zugang zur Raumverwaltung: „Raum anlegen" im Seitenkopf ist ein echter Link
+ * auf /rooms/new, jede Raumkarte trägt einen raumspezifischen
+ * Bearbeiten-Link /rooms/:id/edit, und beim erneuten Mount (Rückkehr aus dem
+ * Formular) wird frisch geholt, sodass neue bzw. geänderte Räume erscheinen.
+ */
+describe("RoomList – Anlegen-/Bearbeiten-Zugang", () => {
+  it("zeigt den „Raum anlegen“-Button sichtbar und verweist auf /rooms/new", async () => {
+    global.fetch = fetchWith([]) as unknown as typeof global.fetch;
+    window.history.pushState({}, "", "/rooms");
+    render(<App />);
+
+    // Leerzustand statt Grid: der Button muss trotzdem sichtbar sein.
+    await screen.findByTestId("rooms-empty");
+
+    const button = screen.getByTestId("room-create-link");
+    expect(button).toBeVisible();
+    expect(button.tagName).toBe("A"); // asChild: Button-Look über echtem <a>
+    expect(button).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/rooms\/new$/)
+    );
+  });
+
+  it("trägt je Raum einen Bearbeiten-Link mit raumspezifischer Ziel-URL", async () => {
+    global.fetch = fetchApi() as unknown as typeof global.fetch;
+    renderRoomList();
+
+    const grid = await screen.findByTestId("rooms-grid");
+    const cards = within(grid).getAllByTestId("room-card");
+    expect(cards).toHaveLength(3);
+
+    for (const room of ROOMS) {
+      const link = within(grid).getByTestId(`room-edit-${room.id}`);
+      expect(link.tagName).toBe("A");
+      expect(link).toHaveAttribute(
+        "href",
+        expect.stringMatching(new RegExp(`/rooms/${room.id}/edit$`))
+      );
+    }
+    // Jede Karte genau einen solchen Link – keine Karte ohne Zugang.
+    for (const card of cards) {
+      expect(within(card).getAllByRole("link")).toHaveLength(1);
+    }
+  });
+
+  it("holt bei Rückkehr aus dem Formular neu und zeigt den angelegten bzw. geänderten Raum", async () => {
+    // Erster Mount: Ausgangsliste ohne den neuen Raum.
+    const ersteListe = ROOMS;
+    let aktuelleListe = ersteListe;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL): Promise<Response> => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        if (url === "/api/rooms") return jsonResponse(aktuelleListe);
+        if (url === "/api/amenities") return jsonResponse(AMENITIES);
+        throw new Error(`Unerwarteter API-Pfad: ${url}`);
+      }
+    );
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+
+    renderRoomList();
+    await waitForRooms(3);
+
+    // „Formular speichern": die Liste dahinter wächst um den neuen Raum.
+    aktuelleListe = [
+      ...ersteListe,
+      {
+        id: 4,
+        name: "Studio West",
+        locationId: 9,
+        capacity: 6,
+        amenities: [{ key: "beamer", label: "Beamer" }],
+        location: { id: 9, name: "Loft" },
+      },
+    ];
+
+    // Rückkehr = Unmount der Liste und frischer Mount (kein Cache-State):
+    // Der zweite Mount holt erneut und zeigt den neuen Raum.
+    cleanup();
+    renderRoomList();
+    const grid = await waitForRooms(4);
+    expect(within(grid).getByText("Studio West")).toBeInTheDocument();
+
+    // Frischer Abruf belegt: /api/rooms wurde zweimal gerufen (je Mount).
+    const roomsCalls = fetchMock.mock.calls.filter(([input]) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      return url === "/api/rooms";
+    });
+    expect(roomsCalls).toHaveLength(2);
+
+    // Auch der neue Raum trägt den Bearbeiten-Zugang.
+    expect(within(grid).getByTestId("room-edit-4")).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/rooms\/4\/edit$/)
+    );
+  });
+});
+
+/**
  * Formular-Routen: /rooms/new und /rooms/:id/edit sind über die echte
  * App-Shell erreichbar und rendern das Raum-Anlegen- bzw. das vorausgefüllte
- * Bearbeiten-Formular – so führen die Links aus dem Folge-Ticket nicht ins
+ * Bearbeiten-Formular – so führen die Links aus diesem Ticket nicht ins
  * Leere. Das Backend wird wie oben über global.fetch gemockt.
  */
 describe("Formular-Routen", () => {

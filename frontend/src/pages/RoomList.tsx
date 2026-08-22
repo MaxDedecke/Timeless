@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   AlertCircle,
   Inbox,
   MapPin,
+  Pencil,
   Plus,
   RotateCw,
   SearchX,
@@ -188,16 +190,31 @@ function RoomCard({ room }: { room: Room }) {
           {room.location?.name ?? "Ohne Standort"}
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-wrap gap-1.5 pt-0">
-        {room.amenities.length === 0 ? (
-          <span className="text-xs text-muted-foreground">
-            Keine Ausstattung hinterlegt
-          </span>
-        ) : (
-          room.amenities.map((amenity) => (
-            <Badge key={amenity.key}>{amenity.label}</Badge>
-          ))
-        )}
+      <CardContent className="flex flex-col gap-3 pt-0">
+        <div className="flex flex-wrap gap-1.5">
+          {room.amenities.length === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              Keine Ausstattung hinterlegt
+            </span>
+          ) : (
+            room.amenities.map((amenity) => (
+              <Badge key={amenity.key}>{amenity.label}</Badge>
+            ))
+          )}
+        </div>
+        {/* Zugang zur Raumverwaltung: raumspezifische Bearbeiten-URL. */}
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className="self-start"
+          data-testid={`room-edit-${room.id}`}
+        >
+          <Link to={`/rooms/${room.id}/edit`}>
+            <Pencil className="h-4 w-4" aria-hidden="true" />
+            Bearbeiten
+          </Link>
+        </Button>
       </CardContent>
     </Card>
   );
@@ -205,7 +222,9 @@ function RoomCard({ room }: { room: Room }) {
 
 /**
  * Seitenkopf je Ansicht (Konzept): Titel links, Primäraktion rechts.
- * Die Aktion „Raum anlegen" ist verdrahtet, sobald die Raumverwaltung kommt.
+ * Die Primäraktion „Raum anlegen" führt als echter Router-Link (Button-Look
+ * via asChild) auf das Formular /rooms/new; je Raumzeile bietet RoomCard den
+ * Bearbeiten-Zugang über /rooms/:id/edit.
  */
 function PageHeader({ roomsCount }: { roomsCount: number }) {
   return (
@@ -222,9 +241,11 @@ function PageHeader({ roomsCount }: { roomsCount: number }) {
           )}
         </p>
       </div>
-      <Button disabled title="Kommt mit der Raumverwaltung">
-        <Plus className="h-4 w-4" aria-hidden="true" />
-        Raum anlegen
+      <Button asChild data-testid="room-create-link">
+        <Link to="/rooms/new">
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          Raum anlegen
+        </Link>
       </Button>
     </div>
   );
@@ -259,6 +280,10 @@ export default function RoomList() {
     }
   }, []);
 
+  // Jeder Mount holt frisch: Der Listen-State lebt nur in dieser
+  // Komponenteninstanz und wird nirgendwo gecacht – nach der Rückkehr aus dem
+  // Anlegen-/Bearbeiten-Formular erscheinen neue bzw. geänderte Räume daher
+  // ohne manuelles Neuladen.
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
