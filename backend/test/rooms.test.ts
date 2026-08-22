@@ -3,9 +3,16 @@ import { after, test } from "node:test";
 import request from "supertest";
 import app from "../src/server.js";
 import { pool } from "../src/db.js";
-import { listRooms } from "../src/services/rooms.js";
+import {
+  createRoom,
+  getRoom,
+  listRooms,
+  updateRoom,
+} from "../src/services/rooms.js";
+import { ValidationError } from "../src/services/errors.js";
 import {
   FakeDbSession,
+  FakePool,
   normalizeSql,
   queriesMatching,
 } from "./helpers/fake-pool.js";
@@ -259,6 +266,228 @@ test("listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverän
   }
 });
 
+// ---------------------------------------------------------------------------
+// Teil 1c: Containerlose Service-Tests für Anlegen und Ändern (dieses Ticket).
+//
+// Gleiche Naht wie in locations.test.ts: Der Fake protokolliert die Statements
+// der Transaktion und beantwortet sie so, wie es Postgres täte. Geprüft wird
+// die Fachlogik von services/rooms – Anlegen inkl. GET-Nachweis, drei
+// Pflichtfeld-Ablehnungen und Änderung von Standort/Kapazität.
+// ---------------------------------------------------------------------------
+
+/** Zeile des ROOM_WITH_LOCATION_SELECT für einen Raum (Form wie in Postgres). */
+function roomRow(
+  id: number,
+  name: string,
+  locationId: number,
+  capacity: number,
+  locationName: string
+): Record<string, unknown> {
+  return {
+    id,
+    name,
+    locationId,
+    capacity,
+    amenities: [],
+    location: { id: locationId, name: locationName },
+  };
+}
+
+/**
+ * Responder, der die Transaktion von createRoom nachstellt:
+ * Standort-Existenzcheck -> INSERT -> Rücklesen über den Standort-Join.
+ */
+function respondToCreate(
+  fake: FakePool,
+  expected: { name: string; locationId: number; capacity: number; locationName: string }
+): void {
+  fake.respondWith((record) => {
+    const sql = normalizeSql(record.sql);
+    // Transaktionsrahmen von createRoom – wird nur protokolliert.
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(sql)) return { rows: [] };
+    if (/^SELECT 1 FROM locations WHERE id = \$1$/i.test(sql)) {
+      assert.deepEqual(
+        record.values,
+        [expected.locationId],
+        "Der Standort-Check muss mit der gelieferten Standort-ID laufen"
+      );
+      return { rows: [{ id: expected.locationId }], rowCount: 1 };
+    }
+    if (/^INSERT INTO rooms/i.test(sql)) {
+      assert.deepEqual(
+        record.values,
+        [expected.name, expected.locationId, expected.capacity],
+        "INSERT muss Name, Standort und Kapazität als Parameter übernehmen"
+      );
+      return { rows: [{ id: 777 }], rowCount: 1 };
+    }
+    if (/FROM rooms JOIN locations/i.test(sql)) {
+      return {
+        rows: [
+          roomRow(777, expected.name, expected.locationId, expected.capacity, expected.locationName),
+        ],
+      };
+    }
+    throw new Error(`Unerwartete Abfrage in respondToCreate: ${record.sql}`);
+  });
+}
+
+test("Raum anlegen: createRoom schreibt Name, Standort und Kapazität; der Raum ist anschließend per getRoom abrufbar", async () => {
+  const session = beginFakeSession();
+  const fake = session.fake;
+  const name = `rooms_fake_${Date.now()} – Besprechung`;
+
+  try {
+    respondToCreate(fake, {
+      name,
+      locationId: 11,
+      capacity: 12,
+      locationName: "Hamburg",
+    });
+
+    const created = await createRoom(name, 11, 12);
+
+    // Genau ein INSERT – kein versteckter zweiter Schreibzugriff.
+    assert.equal(queriesMatching(fake, /INSERT INTO rooms/i).length, 1);
+    assert.equal(created.id, 777);
+    assert.equal(created.name, name);
+    assert.equal(created.locationId, 11);
+    assert.equal(created.capacity, 12);
+    assert.deepEqual(created.location, { id: 11, name: "Hamburg" });
+
+    // GET-Nachweis: derselbe Raum ist einzeln abrufbar und trägt alle drei
+    // Pflichtfelder (Akzeptanzkriterium „erscheint danach in der Raumliste“,
+    // hier auf der Service-Ebene als Detailabruf).
+    const readBack = await getRoom(created.id);
+    assert.equal(readBack.id, created.id);
+    assert.equal(readBack.name, name);
+    assert.equal(readBack.locationId, 11);
+    assert.equal(readBack.capacity, 12);
+    assert.equal(readBack.location.name, "Hamburg");
+  } finally {
+    session.end();
+  }
+});
+
+for (const missing of [
+  { label: "fehlendem Namen", rawName: "", rawLocationId: 11, rawCapacity: 12 },
+  { label: "fehlendem Standort", rawName: "Raum", rawLocationId: null, rawCapacity: 12 },
+  { label: "fehlender Kapazität", rawName: "Raum", rawLocationId: 11, rawCapacity: null },
+]) {
+  test(`Raum anlegen mit ${missing.label} wird abgelehnt, bevor die Datenbank berührt wird`, async () => {
+    const session = beginFakeSession();
+    const fake = session.fake;
+
+    try {
+      await assert.rejects(
+        createRoom(missing.rawName, missing.rawLocationId, missing.rawCapacity),
+        (err: unknown) => {
+          assert.ok(
+            err instanceof ValidationError,
+            `${missing.label} führte nicht zu einem ValidationError`
+          );
+          assert.ok(
+            typeof (err as Error).message === "string" &&
+              (err as Error).message.length > 0,
+            "Die Ablehnung enthält keine verständliche Fehlermeldung"
+          );
+          return true;
+        },
+        `${missing.label} wurde nicht abgelehnt`
+      );
+
+      // Weder Standort-Check noch INSERT dürfen bei ungültigen Pflichtfeldern
+      // passiert sein – kein Persistieren eines halben Raums.
+      assert.deepEqual(
+        queriesMatching(fake, /INSERT INTO rooms/i),
+        [],
+        "Bei fehlendem Pflichtfeld darf kein INSERT abgesetzt werden"
+      );
+      assert.deepEqual(
+        queriesMatching(fake, /SELECT 1 FROM locations/i),
+        [],
+        "Bei fehlendem Pflichtfeld darf noch nicht einmal der Standort geprüft werden"
+      );
+    } finally {
+      session.end();
+    }
+  });
+}
+
+test("Standort und Kapazität ändern: updateRoom ändert genau diese Felder; die Änderung ist per getRoom sichtbar", async () => {
+  const session = beginFakeSession();
+  const fake = session.fake;
+  const newName = "Besprechung (neuer Standort)";
+
+  try {
+    fake.respondWith((record) => {
+      const sql = normalizeSql(record.sql);
+      if (/^BEGIN$/i.test(sql)) return { rows: [] };
+      if (/^SELECT 1 FROM rooms WHERE id = \$1$/i.test(sql)) {
+        assert.deepEqual(record.values, [777], "Änderung läuft gegen die falsche Raum-ID");
+        return { rows: [{ id: 777 }], rowCount: 1 };
+      }
+      if (/^SELECT 1 FROM locations WHERE id = \$1$/i.test(sql)) {
+        assert.deepEqual(
+          record.values,
+          [12],
+          "Der neue Standort muss fachlich geprüft werden"
+        );
+        return { rows: [{ id: 12 }], rowCount: 1 };
+      }
+      if (/^UPDATE rooms SET/i.test(sql)) {
+        assert.match(
+          sql,
+          /location_id = \$2/i,
+          "Der Standort muss im UPDATE gesetzt werden"
+        );
+        assert.match(
+          sql,
+          /capacity = \$3/i,
+          "Die Kapazität muss im UPDATE gesetzt werden"
+        );
+        assert.doesNotMatch(
+          sql,
+          /name\s*=/i,
+          "Ein PATCH ohne Namensfeld darf den Namen nicht anfassen"
+        );
+        assert.deepEqual(
+          record.values,
+          [12, 20, 777],
+          "UPDATE muss neue Werte plus Raum-ID in dieser Reihenfolge binden"
+        );
+        return { rows: [], rowCount: 1 };
+      }
+      if (/FROM rooms JOIN locations/i.test(sql)) {
+        return {
+          rows: [roomRow(777, "Besprechung alt", 12, 20, "Berlin")],
+        };
+      }
+      if (/^COMMIT$/i.test(sql)) return { rows: [] };
+      if (/^ROLLBACK$/i.test(sql)) return { rows: [] };
+      throw new Error(`Unerwartete Abfrage im Test: ${record.sql}`);
+    });
+
+    const updated = await updateRoom(777, { locationId: 12, capacity: 20 }, "patch");
+
+    // Kein zweites UPDATE – die Änderung ist ein einzelner Schreibzugriff.
+    assert.equal(queriesMatching(fake, /^UPDATE rooms SET/i).length, 1);
+    assert.equal(updated.locationId, 12);
+    assert.equal(updated.capacity, 20);
+    assert.deepEqual(updated.location, { id: 12, name: "Berlin" });
+
+    // GET-Nachweis: die Änderung ist über den Detailabruf sichtbar, der
+    // unangetastete Name bleibt erhalten.
+    const readBack = await getRoom(777);
+    assert.equal(readBack.name, "Besprechung alt");
+    assert.equal(readBack.locationId, 12);
+    assert.equal(readBack.capacity, 20);
+    assert.equal(readBack.location.name, "Berlin");
+  } finally {
+    session.end();
+  }
+});
+
 if (canReachDb) {
   // Eigene Standorte, damit der Test nicht an fremden Daten hängt.
   const baseLocation = await request(app)
@@ -413,8 +642,5 @@ if (canReachDb) {
       );
     }
   });
-} else {
-  test("API-Integrationsteil übersprungen (keine Postgres erreichbar)", () => {
-    assert.ok(true);
-  });
 }
+
