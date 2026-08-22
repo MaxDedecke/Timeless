@@ -4,12 +4,26 @@ import {
   cleanup,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import App from "../src/App";
 import RoomList from "../src/pages/RoomList";
+
+// jsdom kennt kein ResizeObserver; die Radix-Checkbox misst ihr verstecktes
+// Formular-Input aber genau damit, sobald sie INNERHALB eines <form> steht
+// (im Raumformular der Fall, im AmenityFilter nicht). Der Stub hält die
+// Rendering-Tests von RoomForm-Routen dadurch grün, ohne App-Code zu ändern.
+if (typeof window.ResizeObserver === "undefined") {
+  window.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver;
+}
 
 /**
  * Raumliste: alle vier Zustände (lädt, Daten, leer, Fehler) sind erkennbar
@@ -121,6 +135,7 @@ afterEach(() => {
   // @testing-library/react daher kein Auto-Cleanup registriert.
   cleanup();
   vi.restoreAllMocks();
+  window.history.pushState({}, "", "/");
 });
 
 describe("RoomList – Zustände", () => {
@@ -289,5 +304,103 @@ describe("RoomList – Ausstattungsfilter", () => {
     );
     await waitForRooms(3);
     expect(screen.queryByTestId("rooms-no-match")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Formular-Routen: /rooms/new und /rooms/:id/edit sind über die echte
+ * App-Shell erreichbar und rendern das Raum-Anlegen- bzw. das vorausgefüllte
+ * Bearbeiten-Formular – so führen die Links aus dem Folge-Ticket nicht ins
+ * Leere. Das Backend wird wie oben über global.fetch gemockt.
+ */
+describe("Formular-Routen", () => {
+  function fetchMitDetail(rooms: (typeof ROOMS)[number][] = ROOMS) {
+    return vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.startsWith("/api/rooms/")) {
+        const id = Number(url.slice("/api/rooms/".length));
+        const raum = rooms.find((r) => r.id === id);
+        if (raum === undefined) {
+          return jsonResponse({ error: "Raum nicht gefunden." }, 404);
+        }
+        return jsonResponse(raum);
+      }
+      if (url === "/api/rooms") return jsonResponse(rooms);
+      if (url === "/api/locations")
+        return jsonResponse([
+          { id: 7, name: "Werkhaus" },
+          { id: 9, name: "Loft" },
+        ]);
+      if (url === "/api/amenities") return jsonResponse(AMENITIES);
+      throw new Error(`Unerwarteter API-Pfad: ${url}`);
+    });
+  }
+
+  it("rendert unter /rooms/new das leere Anlegen-Formular mit Standort-Auswahl", async () => {
+    global.fetch = fetchMitDetail() as unknown as typeof global.fetch;
+    window.history.pushState({}, "", "/rooms/new");
+    render(<App />);
+
+    // Das Formular ist leer (kein Raum geladen), sobald die Kataloge da sind.
+    const formular = await screen.findByTestId("room-form");
+    expect(screen.getByTestId("room-name")).toHaveValue("");
+    expect(screen.getByTestId("room-capacity")).toHaveValue(null);
+    expect(screen.getByTestId("room-location")).toHaveValue("");
+
+    // Kataloge kommen über relative Pfade; Merkmale sind nicht vorausgefüllt.
+    await waitFor(() => {
+      expect(within(formular).getAllByRole("checkbox").length).toBe(3);
+    });
+    expect(screen.getByTestId("room-amenity-beamer")).toHaveAttribute(
+      "data-state",
+      "unchecked"
+    );
+  });
+
+  it("rendert unter /rooms/1/edit das Bearbeiten-Formular mit vorausgefüllten Werten", async () => {
+    global.fetch = fetchMitDetail() as unknown as typeof global.fetch;
+    window.history.pushState({}, "", "/rooms/1/edit");
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Raum bearbeiten",
+        level: 1,
+      })
+    ).toBeInTheDocument();
+    expect(await screen.findByTestId("room-form")).toBeInTheDocument();
+
+    // Vorausfüllung aus GET /api/rooms/1 (Atelier Nord).
+    expect(screen.getByTestId("room-name")).toHaveValue("Atelier Nord");
+    expect(screen.getByTestId("room-capacity")).toHaveValue(12);
+    expect(screen.getByTestId("room-location")).toHaveValue("7");
+    expect(screen.getByTestId("room-amenity-beamer")).toHaveAttribute(
+      "data-state",
+      "checked"
+    );
+    expect(screen.getByTestId("room-amenity-videokonferenz")).toHaveAttribute(
+      "data-state",
+      "checked"
+    );
+    expect(screen.getByTestId("room-amenity-whiteboard")).toHaveAttribute(
+      "data-state",
+      "unchecked"
+    );
+  });
+
+  it("zeigt bei unbekannter Raum-ID eine verständliche Fehlermeldung statt eines rohen Fehlers", async () => {
+    global.fetch = fetchMitDetail([]) as unknown as typeof global.fetch;
+    window.history.pushState({}, "", "/rooms/999/edit");
+    render(<App />);
+
+    const fehler = await screen.findByTestId("room-form-error");
+    expect(fehler).toHaveTextContent("Raum konnte nicht geladen werden");
+    expect(fehler).toHaveTextContent("Raum nicht gefunden.");
+    expect(screen.queryByTestId("room-form")).not.toBeInTheDocument();
   });
 });

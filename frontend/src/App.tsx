@@ -9,6 +9,7 @@ import {
 
 import Sidebar from "./components/Sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import RoomForm from "./pages/RoomForm";
 import RoomList from "./pages/RoomList";
 
 /**
@@ -115,6 +116,14 @@ function Shell() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/rooms" element={<RoomList />} />
+            {/* Anlegen und Bearbeiten: /rooms/new muss VOR /rooms/:id/edit
+                nicht ausweichen, kollidiert aber auch nicht – statisch vor
+                dynamischem Segment ist in React Router eindeutig. */}
+            <Route path="/rooms/new" element={<RoomForm mode="create" />} />
+            <Route
+              path="/rooms/:id/edit"
+              element={<RoomForm mode="edit" />}
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

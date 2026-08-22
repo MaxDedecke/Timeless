@@ -40,6 +40,15 @@ export function listRooms(): Promise<Room[]> {
   return requestJson<Room[]>("/api/rooms");
 }
 
+/**
+ * Liest einen einzelnen Raum inklusive Standort und Merkmale
+ * (GET /api/rooms/:id) – Vorausfüllung des Bearbeiten-Formulars. Eine
+ * unbekannte oder nicht-numerische ID kommt als ApiError mit Status 404.
+ */
+export function getRoom(id: number): Promise<Room> {
+  return requestJson<Room>(`/api/rooms/${encodeURIComponent(id)}`);
+}
+
 /** Legt einen Raum an (POST /api/rooms) und liefert den angelegten Datensatz. */
 export function createRoom(data: RoomInput): Promise<Room> {
   return requestJson<Room>("/api/rooms", { method: "POST", body: data });
