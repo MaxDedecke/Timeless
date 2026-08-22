@@ -3,6 +3,12 @@ import { after, test } from "node:test";
 import request from "supertest";
 import app from "../src/server.js";
 import { pool } from "../src/db.js";
+import { listRooms } from "../src/services/rooms.js";
+import {
+  FakeDbSession,
+  normalizeSql,
+  queriesMatching,
+} from "./helpers/fake-pool.js";
 
 const testRun = `rooms_test_${Date.now()}`;
 
@@ -137,6 +143,121 @@ async function createTestRoom(
   );
   return rows[0].id;
 }
+
+// ---------------------------------------------------------------------------
+// Teil 1b: Containerlose Service-Tests über den Fake-Pool (Test-Naht in
+// src/db.ts). Sie prüfen die Leselogik der Raumliste ohne Postgres:
+// GET /api/rooms bzw. listRooms() muss je Raum die zugeordneten Merkmale
+// mitliefern – Räume ohne Zuordnung als leeres Array, nicht null und
+// nicht mit Fehler (Akzeptanzkriterien dieses Tickets).
+//
+// Bewusst Service-Ebene statt supertest: Der Fake beantwortet Abfragen nur
+// protokollierend; die Route fügt hier keine Logik hinzu, und ein Fake auf
+// HTTP-Ebene müsste JSON-Serialisierung nachbauen, um nichts zu prüfen.
+// ---------------------------------------------------------------------------
+
+// Eigene Fake-Pool-Sitzung je Test (begin/end im finally): So bleibt die Naht
+// nur für den jeweiligen Service-Test aktiv und die DB-Integrationstests
+// derselben Datei treffen im Compose-Stack weiterhin die echte Postgres.
+function beginFakeSession(): FakeDbSession {
+  const session = new FakeDbSession();
+  session.begin();
+  return session;
+}
+
+test("listRooms liefert je Raum die zugeordneten Merkmale mit", async () => {
+  const session = beginFakeSession();
+  const fake = session.fake;
+  const amenityRow = { key: "beamer", label: "Beamer" };
+  // Ein Raum mit Zuordnung, einer ohne: Der Responder gibt pro Raum-ID zurück,
+  // was die korrelierte Merkmals-Subquery in Postgres liefern würde.
+  const amenitiesByRoom = new Map<number, Array<Record<string, unknown>>>([
+    [101, [amenityRow]],
+    [102, []],
+  ]);
+  fake.respondWith((record) => {
+    assert.match(
+      normalizeSql(record.sql),
+      /FROM rooms JOIN locations/i,
+      "Raumliste fragt nicht den erwarteten Select ab"
+    );
+    assert.ok(
+      normalizeSql(record.sql).includes("COALESCE"),
+      "Raumliste sichert fehlende Zuordnungen nicht per COALESCE ab"
+    );
+    return {
+      rows: [
+        {
+          id: 101,
+          name: "Besprechung klein",
+          locationId: 11,
+          capacity: 6,
+          amenities: amenitiesByRoom.get(101),
+          location: { id: 11, name: "Hamburg" },
+        },
+        {
+          id: 102,
+          name: "Besprechung groß",
+          locationId: 11,
+          capacity: 20,
+          amenities: amenitiesByRoom.get(102),
+          location: { id: 11, name: "Hamburg" },
+        },
+      ],
+    };
+  });
+
+  try {
+    const rooms = await listRooms();
+
+    assert.equal(rooms.length, 2);
+    const withAmenity = rooms.find((room) => room.id === 101);
+    assert.ok(withAmenity, "Raum 101 fehlt in der Liste");
+    assert.deepEqual(withAmenity.amenities, [
+      { key: "beamer", label: "Beamer" },
+    ]);
+
+    const withoutAmenities = rooms.find((room) => room.id === 102);
+    assert.ok(withoutAmenities, "Raum 102 fehlt in der Liste");
+    assert.deepEqual(
+      withoutAmenities.amenities,
+      [],
+      "Raum ohne Merkmale muss ein leeres Array liefern"
+    );
+    assert.equal(Array.isArray(withoutAmenities.amenities), true);
+  } finally {
+    session.end();
+  }
+});
+
+test("listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverändert zu", async () => {
+  const session = beginFakeSession();
+  const fake = session.fake;
+  fake.respondWith(() => ({
+    rows: [
+      {
+        id: 201,
+        name: `Solo ${Date.now()}`,
+        locationId: 12,
+        capacity: 4,
+        amenities: [],
+        location: { id: 12, name: "Berlin" },
+      },
+    ],
+  }));
+
+  try {
+    const rooms = await listRooms();
+    assert.equal(rooms.length, 1);
+    assert.equal(rooms[0].id, 201);
+    assert.deepEqual(rooms[0].amenities, []);
+
+    const listQueries = queriesMatching(fake, /FROM rooms JOIN locations/i);
+    assert.equal(listQueries.length, 1);
+  } finally {
+    session.end();
+  }
+});
 
 if (canReachDb) {
   // Eigene Standorte, damit der Test nicht an fremden Daten hängt.
