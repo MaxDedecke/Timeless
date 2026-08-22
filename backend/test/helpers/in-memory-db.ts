@@ -37,7 +37,11 @@ export class InMemoryDb {
 
   constructor() {
     this.db = newDb();
-    this.pool = this.db.adapters.createPg().Pool as unknown as Pool;
+    // createPg().Pool ist die Pool-KLASSE – hier muss eine Instanz entstehen,
+    // sonst fehlen query/connect/end am Objekt (die Methoden hängen am
+    // Prototyp der Instanz, nicht statisch an der Klasse).
+    const PgPool = this.db.adapters.createPg().Pool;
+    this.pool = new PgPool() as unknown as Pool;
   }
 
   /**
