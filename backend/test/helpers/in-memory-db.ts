@@ -1,6 +1,19 @@
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { newDb } from "pg-mem";
 import type { IBackup, IMemoryDb } from "pg-mem";
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
+
+/**
+ * Produktions-Migrationsverzeichnis – relativ zu dieser Datei aufgelöst, damit
+ * der Helper exakt dieselben SQL-Dateien liest wie der Läufer in
+ * src/db/migrate.ts (und nicht eine kopierte zweite Wahrheit pflegt).
+ */
+const MIGRATIONS_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../src/db/migrations"
+);
 
 /**
  * Echte In-Memory-Postgres für containerlose Tests – die Naht, die SQL
@@ -32,9 +45,12 @@ import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
  *   Test-Suiten laufen sequenziell; dafür ist der Weg zur echten Postgres im
  *   Compose-Stack gedacht.
  *
- * Bewusst ohne Schema-Vorbelegung: Die Klasse ist neutral, jeder Test bringt
- * sein eigenes Schema mit (der Smoke-Test macht sein CREATE TABLE selbst) oder
- * ruft den Produktions-Migrationsläufer gegen `connect()` auf.
+ * Schema: Standardmäßig startet die Instanz LEER. Mit `applyMigrations()` wird
+ * das reale Schema aus src/db/migrations eingespielt – dieselben Dateien in
+ * derselben Reihenfolge wie der Produktions-Läufer, damit die Tests das echte
+ * Schema vorfinden statt einer zweiten Wahrheit im Helper. Jede Instanz ist
+ * vollständig eigenständig (kein geteilter Zustand), jeder Testlauf erhält so
+ * ein frisches Schema; Tests beeinflussen sich nicht gegenseitig.
  *
  * Der FakePool bleibt parallel bestehen (FakeDbSession unangetastet); diese
  * Klasse ist die Grundlage, auf der die Services schrittweise echt getestet
@@ -59,6 +75,76 @@ export class InMemoryDb {
     // Prototyp der Instanz, nicht statisch an der Klasse).
     const PgPool = this.db.adapters.createPg().Pool;
     this.pool = new PgPool() as unknown as Pool;
+  }
+
+  /**
+   * Factory gemäß Ticket-Umsetzungsplan: frische Instanz pro Aufruf, mit dem
+   * Produktionsschema bereits eingespielt – genau für den Testaufbau
+   * `const db = await InMemoryDb.migrated();`.
+   */
+  static async migrated(dir: string = MIGRATIONS_DIR): Promise<InMemoryDb> {
+    const db = new InMemoryDb();
+    await db.applyMigrations(dir);
+    return db;
+  }
+
+  /**
+   * Spielt die Migrationsdateien aus src/db/migrations in Dateinamen-
+   * Reihenfolge in dieser Instanz ein. Rückgabe: Namen der angewendeten
+   * Dateien (auf einer frischen Instanz beide). Die Dateien sind per
+   * `IF NOT EXISTS`/`ON CONFLICT` zwar idempotent formuliert wie beim
+   * Produktions-Läufer, ein erneuter Lauf auf derselben Instanz scheitert
+   * aber an der unten genannten pg-mem-Grenze – deshalb eine frische
+   * Instanz je Testlauf statt Wiederholung. Jede Instanz startet ohne
+   * Schema: Der Aufruf liegt bewusst in der Hand des Tests, damit ein Test
+   * auch mal gegen ein leeres Schema laufen kann; wer das reale Schema
+   * braucht, ruft ihn im Testaufbau auf.
+   *
+   * Nicht unterstütztes SQL wird nicht geschluckt: Der Fehler wird mit
+   * Migrationsdatei und Anweisungsausschnitt als Error nach oben gereicht.
+   *
+   * Grenze (empirisch gegen pg-mem 3.0.14 geprüft): Ein erneutes applyMigrations()
+   * auf derselben Instanz scheitert an einem pg-mem-Defekt – `CREATE TABLE
+   * IF NOT EXISTS` gegen bereits existierende Tabelle löst dessen AST-
+   * Coverage-Prüfung aus (NotSupported). Deshalb gilt bewusst der Entwurf
+   * „eine frische Instanz je Testlauf“ statt Wiederholung; die Idempotenz der
+   * Migrationen selbst bleibt Sache des Produktions-Läufers gegen die echte
+   * Postgres. Der optionale Parameter dient ausschließlich Tests dazu, den
+   * Fehlerpfad mit einem Wegwerf-Verzeichnis zu prüfen.
+   */
+  async applyMigrations(dir: string = MIGRATIONS_DIR): Promise<string[]> {
+    const files = (await readdir(dir))
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+    const applied: string[] = [];
+    for (const file of files) {
+      const sql = await readFile(path.join(dir, file), "utf8");
+      try {
+        await this.query(sql);
+      } catch (err) {
+        // Erste fachliche Anweisungszeile (ohne Kommentar-/Leerzeilen) in die
+        // Meldung aufnehmen – damit ist der Bruchpunkt ohne Nachforschen
+        // lokalisierbar, auch wenn die ursprüngliche pg-mem-Meldung den SQL-
+        // Text nicht enthält.
+        const firstStatementLine =
+          sql
+            .split("\n")
+            .map((line) => line.trim())
+            .find((line) => line.length > 0 && !line.startsWith("--")) ?? "";
+        const snippet =
+          firstStatementLine.length > 120
+            ? `${firstStatementLine.slice(0, 117)}...`
+            : firstStatementLine;
+        throw new Error(
+          `Migration ${file} konnte in der In-Memory-DB nicht ausgeführt werden` +
+            (snippet.length > 0 ? ` (Anweisung: ${snippet})` : "") +
+            ` – Ursache: ${err instanceof Error ? err.message : String(err)}`,
+          err instanceof Error ? { cause: err } : undefined
+        );
+      }
+      applied.push(file);
+    }
+    return applied;
   }
 
   /**
