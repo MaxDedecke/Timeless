@@ -52,9 +52,9 @@ const MIGRATIONS_DIR = path.join(
  * vollständig eigenständig (kein geteilter Zustand), jeder Testlauf erhält so
  * ein frisches Schema; Tests beeinflussen sich nicht gegenseitig.
  *
- * Der FakePool bleibt parallel bestehen (FakeDbSession unangetastet); diese
- * Klasse ist die Grundlage, auf der die Services schrittweise echt getestet
- * werden, statt Antworten nur vorzugeben.
+ * Der protokollierende FakePool in ./fake-pool.ts bleibt für Suite-lokale
+ * Protokoll-Assertionen bestehen; diese Klasse ist die Grundlage, auf der die
+ * Services echt getestet werden, statt Antworten nur vorzugeben.
  */
 export class InMemoryDb {
   /** Die zugrunde liegende In-Memory-Datenbank (z. B. für Backup/Restore). */
@@ -70,6 +70,7 @@ export class InMemoryDb {
 
   constructor() {
     this.db = newDb();
+    registerPgMemCompatibilityStubs(this.db);
     // createPg().Pool ist die Pool-KLASSE – hier muss eine Instanz entstehen,
     // sonst fehlen query/connect/end am Objekt (die Methoden hängen am
     // Prototyp der Instanz, nicht statisch an der Klasse).
@@ -152,10 +153,22 @@ export class InMemoryDb {
    * und liefert das Ergebnis in der pg-Form (rows + rowCount).
    */
   async query<R extends QueryResultRow = QueryResultRow>(
-    sql: string,
+    sqlText: string,
     values: unknown[] = []
   ): Promise<QueryResult<R>> {
-    return this.pool.query<R>(sql, values);
+    // pg-mem-Defekt umgehen (siehe Kommentar an isCreateTableIfNotExists):
+    // Einzelstatement-CREATE TABLE IF NOT EXISTS auf existierende Tabelle
+    // wird mit echter Postgres-Semantik als No-op behandelt.
+    if (values.length === 0 && isCreateTableIfNotExists(sqlText)) {
+      const tableName = sqlText.match(CREATE_TABLE_IF_NOT_EXISTS_NAME);
+      if (
+        tableName !== null &&
+        (await tableExistsInSchema(this.db, tableName[1]))
+      ) {
+        return noOpResult("CREATE TABLE");
+      }
+    }
+    return this.pool.query<R>(sqlText, values as never[]);
   }
 
   /**
@@ -173,6 +186,99 @@ export class InMemoryDb {
   async end(): Promise<void> {
     await this.pool.end();
   }
+}
+
+/**
+ * Native Funktionen, die pg-mem (Stand 3.0.14) nicht mitbringt, aber die
+ * Produktions-SQL-Pfade benötigen – als dokumentierte No-op-Stubs:
+ *
+ * - `hashtext(text)` und die Zwei-Schlüssel-Form von `pg_advisory_lock` /
+ *   `pg_advisory_unlock`: Der Migrations-Läufer in src/db/migrate.ts setzt
+ *   sie zur Prozessübergreifenden Absprache ab. Unter pg-mem gibt es keine
+ *   zweite Instanz, um die sie absprechen müssten; der Stub hält nur die
+ *   Aufrufsignatur fest, ohne Verhalten zu prüfen.
+ */
+function registerPgMemCompatibilityStubs(db: IMemoryDb): void {
+  db.public.registerFunction({
+    name: "hashtext",
+    args: ["text"],
+    returns: "int4",
+    implementation: (text: unknown): number => {
+      // Eigenständige 32-Bit-Implementierung (kein Anspruch auf Bitgleichheit
+      // mit Postgres' hashtext – für einen No-op-Stub irrelevant).
+      const s = String(text);
+      let h = 0;
+      for (let i = 0; i < s.length; i++) {
+        h = ((h * 31 + s.charCodeAt(i)) | 0) | 0;
+        if (h > 2147483647) h -= 4294967296;
+        else if (h < -2147483648) h += 4294967296;
+      }
+      return h;
+    },
+  });
+  db.public.registerFunction({
+    name: "pg_advisory_lock",
+    args: ["int8", "int8"],
+    returns: "int8",
+    implementation: () => 0,
+  });
+  db.public.registerFunction({
+    name: "pg_advisory_unlock",
+    args: ["int8", "int8"],
+    returns: "bool",
+    implementation: () => true,
+  });
+}
+
+/**
+ * pg-mem 3.0.14 bricht an zwei Stellen am Migrations-SQL:
+ *
+ * 1. `CREATE TABLE IF NOT EXISTS` gegen eine bereits existierende Tabelle
+ *    wirft dessen AST-Coverage-Fehler ("parts have not been read by the query
+ *    planner"), statt stillschweigend nichts zu tun. Der Migrations-Läufer
+ *    formuliert seine Systemtabelle aber bewusst idempotent.
+ * 2. Mehrstimmige Abfragen (wie eine Migrationsdatei) werden an pg-mems
+ *    Multi-Statement-Grenze zerlegt; dort fehlt der Kontext, dass die Datei
+ *    bereits gelaufen ist bzw. dass die Tabelle schon existiert.
+ *
+ * Beides ist ein Defekt der In-Memory-Engine, nicht unserer Migrationen:
+ * Gegen echte Postgres verhält sich exakt dieses SQL korrekt. Damit der
+ * Migrations-Läufer hier überhaupt einmal vollständig laufen kann, behandelt
+ * diese Klasse genau die Einzelstatement-Form von CREATE TABLE IF NOT EXISTS
+ * vorab selbst – mit echter Postgres-Semantik (Katalogabfrage statt
+ * Raten): Existiert die Tabelle bereits, wird das Statement übersprungen,
+ * sonst unverändert ausgeführt.
+ */
+function isCreateTableIfNotExists(sqlText: string): boolean {
+  return /^create\s+table\s+if\s+not\s+exists\b/i.test(sqlText.trimStart());
+}
+
+/** Erstes Statement-Kürzel einer Tabelle (Groß-/Kleinschreibung egal). */
+const CREATE_TABLE_IF_NOT_EXISTS_NAME = /create\s+table\s+if\s+not\s+exists\s+"?([a-zA-Z_][\w$]*)"?\s*\(/i;
+
+/** Ergebnisform eines verworfenen DDL-Statements (pg-kompatibel). */
+function noOpResult(command: string): QueryResult {
+  return {
+    command,
+    rowCount: 0,
+    rows: [],
+    fields: [],
+  } as unknown as QueryResult;
+}
+
+/** Tabellenexistenz über den SQL-Katalog prüfen statt raten. */
+async function tableExistsInSchema(
+  db: IMemoryDb,
+  tableName: string
+): Promise<boolean> {
+  // Name stammt aus dem eigenen Regex auf eigenem SQL; Escaping ist
+  // Vorsichtsmaßnahme, kein Vertrauensgrenzen-Feature.
+  const safeName = tableName.replace(/'/g, "''");
+  const rows = await db.public.many(
+    "SELECT table_name FROM information_schema.tables " +
+      `WHERE table_schema = 'public' AND table_name = '${safeName}'`
+  );
+  return rows.length > 0;
 }
 
 /** Steuerungs-SQL, das die Snapshot-Abbildung selbst behandelt. */
