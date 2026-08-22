@@ -172,6 +172,23 @@ function beginFakeSession(): FakeDbSession {
   return session;
 }
 
+// Transaktions-SQL läuft über den Client aus pool.connect() und landet damit
+// laut Protokoll-Dokumentation in fake-pool.ts nur im Protokoll DIESES Clients,
+// nicht in pool.queries. Zählungen über Schreibzugriffe müssen Pool und
+// Clients deshalb gemeinsam betrachten.
+function recordedSql(fake: FakePool): string[] {
+  return [
+    ...fake.queries.map((record) => normalizeSql(record.sql)),
+    ...fake.clients.flatMap((client) =>
+      client.queries.map((record) => normalizeSql(record.sql))
+    ),
+  ];
+}
+
+function countRecorded(fake: FakePool, pattern: RegExp): number {
+  return recordedSql(fake).filter((sql) => pattern.test(sql)).length;
+}
+
 test("listRooms liefert je Raum die zugeordneten Merkmale mit", async () => {
   const session = beginFakeSession();
   const fake = session.fake;
@@ -347,8 +364,10 @@ test("Raum anlegen: createRoom schreibt Name, Standort und Kapazität; der Raum 
 
     const created = await createRoom(name, 11, 12);
 
-    // Genau ein INSERT – kein versteckter zweiter Schreibzugriff.
-    assert.equal(queriesMatching(fake, /INSERT INTO rooms/i).length, 1);
+    // Genau ein INSERT – kein versteckter zweiter Schreibzugriff. Das INSERT
+    // läuft innerhalb der Transaktion über den Client und ist deshalb im
+    // Client-Protokoll (siehe recordedSql), nicht in pool.queries.
+    assert.equal(countRecorded(fake, /INSERT INTO rooms/i), 1);
     assert.equal(created.id, 777);
     assert.equal(created.name, name);
     assert.equal(created.locationId, 11);
@@ -408,6 +427,13 @@ for (const missing of [
         [],
         "Bei fehlendem Pflichtfeld darf noch nicht einmal der Standort geprüft werden"
       );
+      // Und auch auf Client-Ebene (Transaktions-Protokoll) darf nichts
+      // abgesetzt worden sein – siehe recordedSql oben.
+      assert.deepEqual(
+        recordedSql(fake).filter((sql) => /^(BEGIN|COMMIT|ROLLBACK)$/.test(sql) === false),
+        [],
+        "Bei fehlendem Pflichtfeld darf noch keine Transaktion Statements absetzen"
+      );
     } finally {
       session.end();
     }
@@ -436,25 +462,41 @@ test("Standort und Kapazität ändern: updateRoom ändert genau diese Felder; di
         return { rows: [{ id: 12 }], rowCount: 1 };
       }
       if (/^UPDATE rooms SET/i.test(sql)) {
-        assert.match(
-          sql,
-          /location_id = \$2/i,
-          "Der Standort muss im UPDATE gesetzt werden"
+        // Platzhalter zählen statt Positionen zu raten: Ein PATCH ohne
+        // Namensfeld vergibt $1/$2 an Standort/Kapazität; die ID kommt als
+        // letzter gebundener Platzhalter – egal, wie viele Felder gesetzt
+        // sind. Genau diese Assertion hätte den fehlenden $ vor dem
+        // ID-Platzhalter im Service aufgedeckt (WHERE id = 3 statt $3).
+        const placeholders = sql.match(/\$\d+/g) ?? [];
+        assert.equal(
+          placeholders.length,
+          record.values.length,
+          "Jeder gebundene Wert braucht genau einen Platzhalter im SQL-Text"
         );
         assert.match(
           sql,
-          /capacity = \$3/i,
-          "Die Kapazität muss im UPDATE gesetzt werden"
+          /location_id = \$1/i,
+          "Der Standort muss als erster Parameter im UPDATE gesetzt werden"
+        );
+        assert.match(
+          sql,
+          /capacity = \$2/i,
+          "Die Kapazität muss als zweiter Parameter im UPDATE gesetzt werden"
+        );
+        assert.match(
+          sql,
+          /WHERE id = \$3$/i,
+          "Die Raum-ID muss als letzter gebundener Parameter im WHERE stehen"
         );
         assert.doesNotMatch(
           sql,
-          /name\s*=/i,
+          /\bname\s*=/i,
           "Ein PATCH ohne Namensfeld darf den Namen nicht anfassen"
         );
         assert.deepEqual(
           record.values,
           [12, 20, 777],
-          "UPDATE muss neue Werte plus Raum-ID in dieser Reihenfolge binden"
+          "UPDATE muss die neuen Werte und zuletzt die Raum-ID binden"
         );
         return { rows: [], rowCount: 1 };
       }
@@ -471,7 +513,9 @@ test("Standort und Kapazität ändern: updateRoom ändert genau diese Felder; di
     const updated = await updateRoom(777, { locationId: 12, capacity: 20 }, "patch");
 
     // Kein zweites UPDATE – die Änderung ist ein einzelner Schreibzugriff.
-    assert.equal(queriesMatching(fake, /^UPDATE rooms SET/i).length, 1);
+    // Das UPDATE läuft innerhalb der Transaktion über den Client und steht
+    // deshalb im Client-Protokoll (siehe recordedSql), nicht in pool.queries.
+    assert.equal(countRecorded(fake, /^UPDATE rooms SET/i), 1);
     assert.equal(updated.locationId, 12);
     assert.equal(updated.capacity, 20);
     assert.deepEqual(updated.location, { id: 12, name: "Berlin" });

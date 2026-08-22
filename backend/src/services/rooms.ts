@@ -282,7 +282,7 @@ export async function updateRoom(
     if (assignments.length > 0) {
       values.push(id);
       await client.query(
-        `UPDATE rooms SET ${assignments.join(", ")} WHERE id = ${values.length}`,
+        `UPDATE rooms SET ${assignments.join(", ")} WHERE id = $${values.length}`,
         values
       );
     }
