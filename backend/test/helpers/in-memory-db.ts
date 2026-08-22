@@ -2,7 +2,11 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDb } from "pg-mem";
-import type { IBackup, IMemoryDb } from "pg-mem";
+// DataType als echter Wert-Import (Enum-Mitglieder in Typposition UND als
+// Werte, siehe registerPgMemCompatibilityStubs): Die pg-mem-Signatur kennt
+// nur ihre eigenen Enum-Mitglieder – "int4"/"int8" scheitern am Lint, auch
+// wenn die Laufzeit sie über typeSynonyms auflösen kann.
+import { DataType, type IBackup, type IMemoryDb } from "pg-mem";
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
 
 /**
@@ -201,8 +205,8 @@ export class InMemoryDb {
 function registerPgMemCompatibilityStubs(db: IMemoryDb): void {
   db.public.registerFunction({
     name: "hashtext",
-    args: ["text"],
-    returns: "int4",
+    args: [DataType.text],
+    returns: DataType.integer,
     implementation: (text: unknown): number => {
       // Eigenständige 32-Bit-Implementierung (kein Anspruch auf Bitgleichheit
       // mit Postgres' hashtext – für einen No-op-Stub irrelevant).
@@ -218,14 +222,14 @@ function registerPgMemCompatibilityStubs(db: IMemoryDb): void {
   });
   db.public.registerFunction({
     name: "pg_advisory_lock",
-    args: ["int8", "int8"],
-    returns: "int8",
+    args: [DataType.bigint, DataType.bigint],
+    returns: DataType.bigint,
     implementation: () => 0,
   });
   db.public.registerFunction({
     name: "pg_advisory_unlock",
-    args: ["int8", "int8"],
-    returns: "bool",
+    args: [DataType.bigint, DataType.bigint],
+    returns: DataType.bool,
     implementation: () => true,
   });
 }
