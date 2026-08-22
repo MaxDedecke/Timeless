@@ -191,14 +191,25 @@ function RoomCard({ room }: { room: Room }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 pt-0">
-        <div className="flex flex-wrap gap-1.5">
+        <div
+          className="flex flex-wrap gap-1.5"
+          data-testid={`room-amenities-${room.id}`}
+        >
           {room.amenities.length === 0 ? (
-            <span className="text-xs text-muted-foreground">
-              Keine Ausstattung hinterlegt
+            <span
+              data-testid={`room-amenities-empty-${room.id}`}
+              className="text-xs text-muted-foreground"
+            >
+              Keine Merkmale
             </span>
           ) : (
             room.amenities.map((amenity) => (
-              <Badge key={amenity.key}>{amenity.label}</Badge>
+              <Badge
+                key={amenity.key}
+                data-testid={`room-amenity-badge-${amenity.key}`}
+              >
+                {amenity.label}
+              </Badge>
             ))
           )}
         </div>

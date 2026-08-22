@@ -30,12 +30,14 @@ if (typeof window.ResizeObserver === "undefined") {
  * Raumliste: alle vier Zustände (lädt, Daten, leer, Fehler) sind erkennbar
  * gestaltet und werden hier je durch einen Test abgesichert – dazu der
  * Ausstattungsfilter (Ein-Merkmal, kombiniert AND, Zurücksetzen, keine
- * Treffer) und der Zugang zur Raumverwaltung: „Raum anlegen" verweist auf
- * /rooms/new, jede Raumkarte trägt einen Bearbeiten-Link /rooms/:id/edit,
- * und nach der Rückkehr aus dem Formular zeigt die Liste den neuen bzw.
- * geänderten Raum (Refetch beim Mount). Das Backend wird über global.fetch
- * gemockt; die Pfad-Prüfung stellt sicher, dass ausschließlich relative
- * /api-Pfade aufgerufen werden (keine Compose-Servicenamen im Browser-Code).
+ * Treffer), die Merkmalsanzeige je Raum als Badge inkl. definiertem
+ * Leerzustand für Räume ohne Merkmale und der Zugang zur Raumverwaltung:
+ * „Raum anlegen" verweist auf /rooms/new, jede Raumkarte trägt einen
+ * Bearbeiten-Link /rooms/:id/edit, und nach der Rückkehr aus dem Formular
+ * zeigt die Liste den neuen bzw. geänderten Raum (Refetch beim Mount). Das
+ * Backend wird über global.fetch gemockt; die Pfad-Prüfung stellt sicher,
+ * dass ausschließlich relative /api-Pfade aufgerufen werden (keine
+ * Compose-Servicenamen im Browser-Code).
  */
 
 /** Direkte Renders von RoomList brauchen Router-Kontext für die Links. */
@@ -186,8 +188,8 @@ describe("RoomList – Zustände", () => {
     expect(within(cards[1]).getByText("Kreativraum Süd")).toBeInTheDocument();
     expect(within(cards[1]).getByText("Loft")).toBeInTheDocument();
     expect(
-      within(cards[1]).getByText("Keine Ausstattung hinterlegt")
-    ).toBeInTheDocument();
+      within(cards[1]).getByTestId("room-amenities-empty-2")
+    ).toHaveTextContent("Keine Merkmale");
 
     // Auch der Merkmals-Katalog kommt über den relativen Pfad.
     await screen.findByTestId("amenity-filter");
@@ -317,6 +319,57 @@ describe("RoomList – Ausstattungsfilter", () => {
     );
     await waitForRooms(3);
     expect(screen.queryByTestId("rooms-no-match")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Merkmalsanzeige je Raum: GET /api/rooms liefert je Raum die zugeordneten
+ * Merkmale als {key, label}; RoomCard zeigt sie als shadcn-Badges. Räume ohne
+ * Merkmale erhalten einen definierten Leerzustand („Keine Merkmale") statt
+ * eines still leeren Bereichs – beides über data-testid verankert, damit
+ * nicht nur der Textinhalt, sondern das gerenderte Markup selbst geprüft
+ * wird.
+ */
+describe("RoomList – Merkmalsanzeige je Raum", () => {
+  it("zeigt die Merkmale eines Raums als shadcn-Badges mit Katalog-Label", async () => {
+    global.fetch = fetchApi() as unknown as typeof global.fetch;
+    renderRoomList();
+    const grid = await waitForRooms(3);
+    const cards = within(grid).getAllByTestId("room-card");
+
+    // Atelier Nord: genau seine zwei Badges, Label aus dem Backend-Katalog.
+    const badgesNord = within(cards[0]).getAllByTestId(/^room-amenity-badge-/);
+    expect(badgesNord.map((badge) => badge.textContent)).toEqual([
+      "Beamer",
+      "Videokonferenz",
+    ]);
+    expect(badgesNord[0]).toHaveClass("inline-flex"); // shadcn-Badge-Basis
+
+    // Werkstatt Ost: eigenes Badge-Set, nichts aus dem ersten Raum übernommen.
+    const badgesOst = within(cards[2]).getAllByTestId(/^room-amenity-badge-/);
+    expect(badgesOst.map((badge) => badge.textContent)).toEqual([
+      "Beamer",
+      "Whiteboard",
+    ]);
+
+    // Der Merkmals-Container trägt die raumbezogene ID (Karte ↔ Merkmale).
+    expect(within(cards[0]).getByTestId("room-amenities-1")).toBeInTheDocument();
+  });
+
+  it("zeigt für einen Raum ohne Merkmale den definierten Leerzustand statt Badges", async () => {
+    global.fetch = fetchApi() as unknown as typeof global.fetch;
+    renderRoomList();
+    await screen.findByTestId("rooms-grid");
+
+    // Kreativraum Süd (id 2) hat keine Merkmale: dezenter Text, keine Badges.
+    const leerzustand = screen.getByTestId("room-amenities-empty-2");
+    expect(leerzustand).toBeVisible();
+    expect(leerzustand).toHaveTextContent("Keine Merkmale");
+
+    const container = screen.getByTestId("room-amenities-2");
+    expect(
+      within(container).queryByTestId(/^room-amenity-badge-/)
+    ).not.toBeInTheDocument();
   });
 });
 
