@@ -9,6 +9,10 @@ import {
   RotateCw,
 } from "lucide-react";
 
+import {
+  listBookingsForRoom,
+  type Booking,
+} from "../api/bookings";
 import { listLocations, type Location } from "../api/locations";
 import { listRooms, type Room } from "../api/rooms";
 import TimeGrid, { type TimeGridLane } from "../components/TimeGrid";
@@ -19,10 +23,10 @@ import { Card } from "../components/ui/card";
 
 /**
  * Tagesansicht (/day bzw. /day/:locationId): listet alle Räume des gewählten
- * Standorts als TimeGrid-Spuren. Erster Ausbau des Tickets „Route mit
- * Standortauswahl und Raumzeilen": Das Grundgerüst je Raum steht, die
- * Belegung (Buchungen je Raum und Tag) folgt im Nachfolgeticket – bis dahin
- * zeichnet TimeGrid jede Spur als durchgehend freie Fenster.
+ * Standorts als TimeGrid-Spuren samt ihrer Belegung am gewählten Tag. Die
+ * Buchungen kommen über denselben Endpoint wie im Raumkalender
+ * (GET /api/bookings?roomId=…), angefordert für alle Räume des Standorts
+ * parallel; jeder Datumswechsel lädt die Belegung des gewählten Tags neu.
  *
  * URL-Vertrag: Der Standort liegt als Routensegment vor (ohne Segment oder
  * bei unbekannter ID fällt die Ansicht auf den ersten Standort aus dem
@@ -135,14 +139,25 @@ export default function DayView() {
   const datum = datumAusSuchparameter(suchparameter.get("date"));
 
   const [state, setState] = useState<LoadState>({ phase: "loading" });
+  const [belegung, setBelegung] = useState<Record<number, Booking[]>>({});
   const [reloadTick, setReloadTick] = useState(0);
 
-  const lade = useCallback(
-    async (signal: AbortSignal) => {
+  /**
+   * Eine einzige Ladeschleife für Standorte/Räume UND Belegung: Sie läuft
+   * beim ersten Laden, nach „Erneut versuchen" und bei jedem Datumswechsel.
+   * Der Datumswechsel ist bewusst ein erneutes Laden statt einer client-
+   * seitigen Filterung – die Ansicht holt je Raum nur die Buchungen des
+   * gewählten Tags (dieselbe Semantik wie der Tagesendpoint im Kalender)
+   * und wirft damit die Daten des Vortags ersatzlos weg. Schlägt auch nur
+   * eine Anfrage fehl, greift der Fehlerzustand der ganzen Ansicht; das
+   * Abbruch-Signal bricht veraltete Läufe ab, bevor sie Zustand setzen.
+   */
+  const ladeAlles = useCallback(
+    async (signal: AbortSignal, tag: string) => {
       try {
         // Standorte zuerst: Sie bestimmen den Ziel-Standort.
         const standorte = await listLocations();
-        if (signal.aborted) return; // Unmount/Neuladen
+        if (signal.aborted) return; // Unmount/Neuladen/Tag gewechselt
         let gefundenerStandort: Location | undefined;
         if (rawLocationId !== undefined && /^\d+$/.test(rawLocationId)) {
           const id = Number(rawLocationId);
@@ -160,36 +175,64 @@ export default function DayView() {
 
         const alleRaeume = await listRooms();
         if (signal.aborted) return;
+        const raeume = alleRaeume.filter((raum) => raum.locationId === zielId);
+
+        // Buchungen aller Räume des Standorts PARALLEL anfordern – derselbe
+        // Endpoint wie im Raumkalender, begrenzt auf den gewählten Tag.
+        const listen = await Promise.allSettled(
+          raeume.map((raum) => listBookingsForRoom(raum.id, tag))
+        );
+        if (signal.aborted) return;
+        if (
+          listen.some((ergebnis) => ergebnis.status === "rejected")
+        ) {
+          throw new Error("Buchungen konnten nicht geladen werden.");
+        }
+
+        const nachRaum: Record<number, Booking[]> = {};
+        raeume.forEach((raum, index) => {
+          nachRaum[raum.id] = (
+            listen[index] as PromiseFulfilledResult<Booking[]>
+          ).value;
+        });
+
         setState({
           phase: "ready",
           standorte,
           location: ziel,
-          rooms: alleRaeume.filter((raum) => raum.locationId === zielId),
+          rooms: raeume,
         });
+        setBelegung(nachRaum);
       } catch {
         if (!signal.aborted) setState({ phase: "error" });
       }
     },
-    [rawLocationId],
+    [rawLocationId]
   );
 
   useEffect(() => {
     const controller = new AbortController();
-    void lade(controller.signal);
+    // Kein veralteter Beleg unter dem neuen Datum: Bei jedem (Neu-)Start der
+    // Ladeschleife fällt die Ansicht sofort zurück in den Ladezustand.
+    setState((vorher) =>
+      vorher.phase === "loading" ? vorher : { phase: "loading" }
+    );
+    void ladeAlles(controller.signal, datum);
     return () => controller.abort();
-  }, [lade]);
+  }, [ladeAlles, datum]);
 
   // Reload muss auf den Tick reagieren, nicht auf ladeAlles allein
   // (dieselbe Konstruktion wie im Raumkalender).
   useEffect(() => {
     if (reloadTick === 0) return;
     const controller = new AbortController();
-    void lade(controller.signal);
+    void ladeAlles(controller.signal, datum);
     return () => controller.abort();
-  }, [reloadTick, lade]);
+  }, [reloadTick, ladeAlles, datum]);
 
   const nochmalLaden = useCallback(() => {
     setState({ phase: "loading" });
+    setBelegung({});
     setReloadTick((tick) => tick + 1);
   }, []);
 
@@ -209,11 +252,16 @@ export default function DayView() {
     return state.rooms.map((room) => ({
       id: room.id,
       title: room.name,
-      // Belegung folgt im Nachfolgeticket – leer bleibt gültig und zeichnet
-      // freie Fenster.
-      bookings: [],
+      // Belegung des gewählten Tags; ein Raum ohne Buchungen bleibt gültig
+      // leer und zeichnet nur freie Fenster.
+      bookings: (belegung[room.id] ?? []).map((buchung) => ({
+        id: buchung.id,
+        start: buchung.startsAt,
+        end: buchung.endsAt,
+        status: buchung.status,
+      })),
     }));
-  }, [state]);
+  }, [state, belegung]);
 
   return (
     <section aria-labelledby="dayview-heading">

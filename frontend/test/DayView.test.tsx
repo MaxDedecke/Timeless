@@ -14,8 +14,11 @@ import { formatDate } from "../src/lib/format";
  * erscheinen nicht), das Datum als Suchparameter mit Default heute und
  * Vorgänger-/Folgetag-Navigation, der Fallback auf den ersten Standort
  * (ohne bzw. mit unbekanntem Routensegment), die Zustände Laden/Fehler/
- * Leer (inkl. „Standort ohne Räume“ und „gar keine Standorte“) sowie der
- * Sidebar-Menüpunkt mit aktiver Markierung.
+ * Leer (inkl. „Standort ohne Räume“ und „gar keine Standorte“), die
+ * Belegung je Raum über denselben Buchungsendpoint wie im Raumkalender –
+ * je Raum angefordert, bei Datumswechsel neu geladen, mit Fehlerzustand,
+ * wenn auch nur eine Anfrage misslingt – sowie der Sidebar-Menüpunkt mit
+ * aktiver Markierung.
  */
 
 const STANDORTE = [
@@ -55,6 +58,34 @@ function heute(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+interface MockBuchung {
+  id: number;
+  roomId: number;
+  createdBy: string;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+}
+
+/** Eine Buchung für einen Raum am Tag (UTC-Zeiten wie die API sie liefert). */
+function buchung(
+  raumId: number,
+  tag: string,
+  startUhr: string,
+  endUhr: string,
+  status = "bestaetigt",
+  id = 101
+): MockBuchung {
+  return {
+    id,
+    roomId: raumId,
+    createdBy: "mitarbeiter@example.com",
+    startsAt: `${tag}T${startUhr}:00.000Z`,
+    endsAt: `${tag}T${endUhr}:00.000Z`,
+    status,
+  };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -73,17 +104,21 @@ function apiUrl(input: RequestInfo | URL): string {
 interface BackendOptionen {
   standorte?: Array<{ id: number; name: string }>;
   raeume?: typeof RAEUME;
+  /** Buchungen je Raum-ID; fehlt ein Raum, gilt er als buchungsfrei. */
+  buchungenJeRaum?: Record<number, MockBuchung[]>;
   locationsFehler?: boolean;
   roomsFehler?: boolean;
 }
 
 /**
- * Installiert das Backend der Tagesansicht: Standort- und Raumliste über
- * relative Pfade; Fehler je Endpoint zuschaltbar.
+ * Installiert das Backend der Tagesansicht: Standort- und Raumliste sowie
+ * die Buchungsliste je Raum über relative Pfade; Fehler je Endpoint
+ * zuschaltbar.
  */
 function installBackend({
   standorte = STANDORTE,
   raeume = RAEUME,
+  buchungenJeRaum = {},
   locationsFehler = false,
   roomsFehler = false,
 }: BackendOptionen = {}) {
@@ -100,6 +135,25 @@ function installBackend({
       if (url === "/api/rooms") {
         if (roomsFehler) return jsonResponse({ error: "Boom" }, 500);
         return jsonResponse(raeume);
+      }
+      // GET /api/bookings?roomId=…[&date=…] – derselbe Endpoint wie im
+      // Raumkalender; fehlt ein Raum im Mock, gilt er als buchungsfrei.
+      // Mit date gilt dieselbe Semantik wie im echten Backend: nur
+      // Buchungen, die den Tag schneiden (halboffenes Intervall).
+      const match = /^\/api\/bookings\?roomId=(\d+)/.exec(url);
+      if (match !== null) {
+        const liste = buchungenJeRaum[Number(match[1])] ?? [];
+        const datumMatch = /[?&]date=(\d{4}-\d{2}-\d{2})/.exec(url);
+        if (datumMatch === null) return jsonResponse(liste);
+        const von = Date.parse(`${datumMatch[1]}T00:00:00.000Z`);
+        const bis = von + 24 * 60 * 60 * 1000;
+        return jsonResponse(
+          liste.filter((eintrag) => {
+            const start = Date.parse(eintrag.startsAt);
+            const ende = Date.parse(eintrag.endsAt);
+            return start < bis && ende > von;
+          })
+        );
       }
       throw new Error(`Unerwarteter API-Pfad: ${url}`);
     }
@@ -214,39 +268,59 @@ describe("Tagesansicht – Datum als Suchparameter", () => {
     );
   });
 
-  it("wechselt per Vorgänger-/Folgetag nur den Suchparameter, ohne neu zu laden", async () => {
+  it("wechselt per Vorgänger-/Folgetag nur den Suchparameter und zeigt das Skeleton bis zum Neuladen", async () => {
     const user = userEvent.setup();
-    const mock = installBackend();
+    // Buchungsabrufe zum Ausgangstag auflösen, jeder andere Tag hängt bewusst
+    // – nur so ist der Zwischenzustand „Datumswechsel läuft, alter Stand schon
+    // weg“ deterministisch beobachtbar statt als Wettlauf.
+    global.fetch = vi.fn(
+      async (input: RequestInfo | URL): Promise<Response> => {
+        const url = apiUrl(input);
+        if (url === "/api/locations") return jsonResponse(STANDORTE);
+        if (url === "/api/rooms") return jsonResponse(RAEUME);
+        if (url.startsWith("/api/bookings?roomId=")) {
+          // Erste Runde (= gewählter Tag 2026-08-21) auflösen, jeder andere
+          // Tag hängt bewusst – parallel laufende Abrufe desselben Tags
+          // treffen dieselbe Entscheidung.
+          if (url.includes("date=2026-08-21")) {
+            return jsonResponse([]);
+          }
+          return new Promise<Response>(() => undefined);
+        }
+        throw new Error(`Unerwarteter API-Pfad: ${url}`);
+      }
+    ) as unknown as typeof global.fetch;
     renderAt("/day/7?date=2026-08-21");
     await screen.findByTestId("timegrid-lane-title-1");
-    const abrufeNachLaden = mock.mock.calls.length;
 
     await user.click(screen.getByTestId("dayview-next-day"));
     await waitFor(() => {
       expect(window.location.search).toBe("?date=2026-08-22");
     });
+
+    // Solange die Belegung des neuen Tags lädt, steht der alte Stand nicht
+    // länger im Gitter: Skeleton statt veralteter Raumspuren, Datum bereits
+    // auf den gewählten Tag gestellt.
+    expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
+    expect(screen.getByTestId("timegrid-loading")).toHaveAttribute(
+      "aria-busy",
+      "true"
+    );
     expect(screen.getByTestId("dayview-date-label")).toHaveTextContent(
       formatDate("2026-08-22T12:00:00Z")
     );
 
-    // Zwei Tage zurück: zweimal Vortag ab dem Folgetag.
+    // Mit wieder heilem Backend kehrt die Ansicht beim nächsten Wechsel aus
+    // dem Skeleton zurück (der hängende Lauf wird dabei abgebrochen).
+    installBackend({ buchungenJeRaum: { 1: [], 2: [], 3: [] } });
     await user.click(screen.getByTestId("dayview-prev-day"));
-    await user.click(screen.getByTestId("dayview-prev-day"));
-    await waitFor(() => {
-      expect(window.location.search).toBe("?date=2026-08-20");
-    });
+    expect(
+      await screen.findByTestId("timegrid-lane-title-1")
+    ).toBeInTheDocument();
     expect(screen.getByTestId("dayview-date-label")).toHaveTextContent(
-      formatDate("2026-08-20T12:00:00Z")
+      formatDate("2026-08-21T12:00:00Z")
     );
-
-    // Kein erneuter Request beim reinen Tageswechsel (Räume bleiben geladen).
-    expect(mock.mock.calls.length).toBe(abrufeNachLaden);
-
-    // „Heute“ setzt auf den aktuellen Tag zurück.
-    await user.click(screen.getByTestId("dayview-today"));
-    await waitFor(() => {
-      expect(window.location.search).toBe(`?date=${heute()}`);
-    });
+    expect(screen.queryByTestId("timegrid-loading")).not.toBeInTheDocument();
   });
 });
 
@@ -277,7 +351,7 @@ describe("Tagesansicht – Zustände", () => {
     expect(fehler).toHaveTextContent("Erneut versuchen");
 
     // Danach funktioniert das Neuladen mit heillem Backend.
-    installBackend();
+    installBackend({ buchungenJeRaum: { 1: [], 2: [] } });
     await user.click(screen.getByTestId("dayview-retry"));
     expect(
       await screen.findByTestId("timegrid-lane-title-1")
@@ -314,6 +388,207 @@ describe("Tagesansicht – Zustände", () => {
     const leer = await screen.findByTestId("dayview-no-locations");
     expect(leer).toHaveTextContent("Noch kein Standort angelegt.");
     expect(screen.queryByTestId("timegrid-loading")).not.toBeInTheDocument();
+  });
+});
+
+describe("Tagesansicht – Belegung je Raum", () => {
+  it("zeigt je Raum des Standorts seine Buchungen des gewählten Tags im Zeitraster", async () => {
+    const tag = "2026-08-21";
+    installBackend({
+      buchungenJeRaum: {
+        1: [
+          buchung(1, tag, "14:00", "15:30", "ausstehend", 102),
+          buchung(1, tag, "09:05", "10:30", "bestaetigt", 101),
+        ],
+        // Raum 2 hat am Tag eine einzige Buchung …
+        2: [buchung(2, tag, "11:00", "12:00", "bestaetigt", 103)],
+      },
+    });
+    renderAt(`/day/7?date=${tag}`);
+
+    // Spur 1: zwei belegte Slots, zeitlich sortiert, mit Status-Badge.
+    const spur1 = await screen.findByTestId("timegrid-lane-1");
+    const belegt1 = within(spur1).getAllByTestId("timegrid-slot-booked");
+    expect(belegt1).toHaveLength(2);
+    expect(belegt1[0]).toHaveTextContent("09:05 – 10:30");
+    expect(within(belegt1[0]).getByText("Bestätigt")).toHaveClass(
+      "bg-success-background"
+    );
+    expect(belegt1[1]).toHaveTextContent("14:00 – 15:30");
+    expect(within(belegt1[1]).getByText("Ausstehend")).toHaveClass(
+      "bg-warning-background"
+    );
+
+    // Freie Fenster sind je Raum vom Beleg unterschieden (Muted-Token):
+    // vormittags vor der ersten Buchung, nachmittags nach der letzten.
+    const frei1 = within(spur1).getAllByTestId("timegrid-slot-free");
+    for (const slot of frei1) {
+      expect(slot).toHaveClass("bg-muted");
+      expect(slot).toHaveClass("border-dashed");
+    }
+    expect(frei1[0]).toHaveTextContent("08:00 – 09:05");
+    expect(frei1[frei1.length - 1]).toHaveTextContent("15:30 – 20:00");
+
+    // Spur 2: eigener Beleg, nicht der von Raum 1.
+    const spur2 = screen.getByTestId("timegrid-lane-2");
+    const belegt2 = within(spur2).getAllByTestId("timegrid-slot-booked");
+    expect(belegt2).toHaveLength(1);
+    expect(belegt2[0]).toHaveTextContent("11:00 – 12:00");
+    expect(spur2).not.toHaveTextContent("09:05 – 10:30");
+
+    // Der Raum des anderen Standorts erscheint samt Beleg nicht.
+    expect(screen.queryByTestId("timegrid-lane-3")).not.toBeInTheDocument();
+
+    // Weil beide Räume Belegung haben, gibt es kein Hinweisband.
+    expect(
+      screen.queryByTestId("timegrid-no-bookings")
+    ).not.toBeInTheDocument();
+  });
+
+  it("fordert die Buchungen aller Räume des Standorts über denselben Endpoint wie der Raumkalender an", async () => {
+    const mock = installBackend({
+      buchungenJeRaum: { 1: [], 2: [], 3: [] },
+    });
+    renderAt("/day/7?date=2026-08-21");
+    await screen.findByTestId("timegrid-lane-title-1");
+
+    // Derselbe Pfad wie listBookingsForRoom im Kalender – mit dem gewählten
+    // Tag als date-Parameter, für jeden Raum DES GEWÄHLTEN Standorts genau
+    // einmal; der Raum des anderen Standorts wird nicht abgefragt.
+    const abrufe = mock.mock.calls
+      .map((aufruf: [RequestInfo | URL]) => apiUrl(aufruf[0]))
+      .filter((pfad: string) => pfad.startsWith("/api/bookings?roomId="));
+    expect(abrufe).toEqual([
+      "/api/bookings?roomId=1&date=2026-08-21",
+      "/api/bookings?roomId=2&date=2026-08-21",
+    ]);
+
+    // Parallelität: Alle Anfragen laufen in einem Rutsch (Promise.allSettled
+    // im Seitencode) – im Mock-Protokoll folgen auf locations + rooms die
+    // beiden Buchungsabrufe ohne weitere zwischengeschaltete Aufrufe.
+    expect(mock.mock.calls.length).toBe(4);
+  });
+
+  it("lädt beim Datumswechsel die Belegung des jeweils gewählten Tags neu", async () => {
+    const user = userEvent.setup();
+    const tag = "2026-08-21";
+    const folgetag = "2026-08-22";
+    const mock = installBackend({
+      buchungenJeRaum: {
+        1: [
+          buchung(1, tag, "09:00", "10:00", "bestaetigt", 111),
+          buchung(1, folgetag, "14:00", "15:00", "bestaetigt", 112),
+        ],
+        2: [],
+      },
+    });
+    renderAt(`/day/7?date=${tag}`);
+
+    // Gewählter Tag: nur die Buchung dieses Tages im Gitter …
+    const spur1 = await screen.findByTestId("timegrid-lane-1");
+    let belegt1 = within(spur1).getAllByTestId("timegrid-slot-booked");
+    expect(belegt1).toHaveLength(1);
+    expect(belegt1[0]).toHaveTextContent("09:00 – 10:00");
+
+    // … und genau ein Buchungsabruf je Raum zu diesem Tag.
+    const buchungsAbrufeFuer = (raumId: number, tagIso: string): number =>
+      mock.mock.calls.filter(
+        (aufruf: [RequestInfo | URL]) =>
+          apiUrl(aufruf[0]) === `/api/bookings?roomId=${raumId}&date=${tagIso}`
+      ).length;
+    expect(buchungsAbrufeFuer(1, tag)).toBe(1);
+    expect(buchungsAbrufeFuer(1, folgetag)).toBe(0);
+
+    await user.click(screen.getByTestId("dayview-next-day"));
+    await waitFor(() => {
+      expect(window.location.search).toBe(`?date=${folgetag}`);
+    });
+
+    // Neue Belegung: der Folgetags-Block erscheint, der alte ist weg.
+    const spur1Neu = await screen.findByTestId("timegrid-lane-1");
+    belegt1 = within(spur1Neu).getAllByTestId("timegrid-slot-booked");
+    expect(belegt1).toHaveLength(1);
+    expect(belegt1[0]).toHaveTextContent("14:00 – 15:00");
+    expect(spur1Neu).not.toHaveTextContent("09:00 – 10:00");
+    expect(buchungsAbrufeFuer(1, folgetag)).toBe(1);
+
+    // Zurück auf den Vortag holt dessen Beleg erneut (erneutes Laden statt
+    // clientseitiger Filterung) und zeigt wieder den alten Block.
+    await user.click(screen.getByTestId("dayview-prev-day"));
+    const spur1Zurueck = await screen.findByTestId("timegrid-lane-1");
+    expect(
+      within(spur1Zurueck).getAllByTestId("timegrid-slot-booked")[0]
+    ).toHaveTextContent("09:00 – 10:00");
+    expect(buchungsAbrufeFuer(1, tag)).toBe(2);
+  });
+
+  it("greift in den Fehlerzustand, wenn auch nur eine Buchungsanfrage misslingt", async () => {
+    const user = userEvent.setup();
+
+    // Erstlauf: Raum 2 liefert 500 → ganzer Ladevorgang scheitert.
+    global.fetch = vi.fn(
+      async (input: RequestInfo | URL): Promise<Response> => {
+        const url = apiUrl(input);
+        if (url === "/api/locations") return jsonResponse(STANDORTE);
+        if (url === "/api/rooms") return jsonResponse(RAEUME);
+        if (url === "/api/bookings?roomId=1&date=2026-08-21") {
+          return jsonResponse([]);
+        }
+        if (url === "/api/bookings?roomId=2&date=2026-08-21") {
+          return jsonResponse({ error: "Boom" }, 500);
+        }
+        throw new Error(`Unerwarteter API-Pfad: ${url}`);
+      }
+    ) as unknown as typeof global.fetch;
+    renderAt("/day/7?date=2026-08-21");
+
+    const fehler = await screen.findByTestId("dayview-error");
+    expect(fehler).toHaveAttribute("role", "alert");
+    // Keine halbe Ansicht: Solange die Belegung unvollständig ist, erscheint
+    // weder Gitter noch eine Raumspur mit Teil-Daten.
+    expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timegrid-lane-1")).not.toBeInTheDocument();
+
+    // Zweiter Lauf heil: „Erneut versuchen“ lädt alles neu, die Spuren
+    // erscheinen samt Belegung.
+    installBackend({
+      buchungenJeRaum: {
+        1: [buchung(1, "2026-08-21", "09:00", "10:00", "bestaetigt", 121)],
+        2: [],
+      },
+    });
+    await user.click(screen.getByTestId("dayview-retry"));
+    const spur1 = await screen.findByTestId("timegrid-lane-1");
+    expect(within(spur1).getByTestId("timegrid-slot-booked")).toHaveTextContent(
+      "09:00 – 10:00"
+    );
+    expect(screen.queryByTestId("dayview-error")).not.toBeInTheDocument();
+  });
+
+  it("bleibt bei buchungsfreiem Tag im freien Tagesfenster und zeigt das Hinweisband", async () => {
+    installBackend({
+      buchungenJeRaum: { 1: [], 2: [] }, // beide Räume frei
+    });
+    renderAt("/day/7?date=2026-08-21");
+
+    // Fachlicher Leerfall: Hinweisband über dem weiterhin gezeichneten
+    // Gitter, jede Spur durchgehend frei (genau ein Slot 08:00–20:00).
+    const hinweis = await screen.findByTestId("timegrid-no-bookings");
+    expect(hinweis).toBeVisible();
+
+    const spur1 = screen.getByTestId("timegrid-lane-1");
+    const frei1 = within(spur1).getAllByTestId("timegrid-slot-free");
+    expect(frei1).toHaveLength(1);
+    expect(frei1[0]).toHaveTextContent("08:00 – 20:00");
+    expect(
+      within(spur1).queryByTestId("timegrid-slot-booked")
+    ).not.toBeInTheDocument();
+
+    const spur2 = screen.getByTestId("timegrid-lane-2");
+    expect(
+      within(spur2).queryByTestId("timegrid-slot-booked")
+    ).not.toBeInTheDocument();
+    expect(within(spur2).getAllByTestId("timegrid-slot-free")).toHaveLength(1);
   });
 });
 

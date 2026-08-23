@@ -32,10 +32,17 @@ export interface BookingInput {
  * Buchungen eines Raums laden (GET /api/bookings?roomId=…). Grundlage des
  * Raumkalenders – ohne date-Parameter liefert die API alle Buchungen des
  * Raums, die Ansicht filtert clientseitig auf ihren dargestellten Tag.
+ * Mit date (= „YYYY-MM-DD“) begrenzt das Backend auf die Buchungen, die
+ * diesen Tag schneiden – die Tagesansicht nutzt das, um je Raum genau den
+ * gewählten Tag zu holen.
  */
-export function listBookingsForRoom(roomId: number): Promise<Booking[]> {
+export function listBookingsForRoom(
+  roomId: number,
+  date?: string
+): Promise<Booking[]> {
+  const tag = date === undefined ? "" : `&date=${encodeURIComponent(date)}`;
   return requestJson<Booking[]>(
-    `/api/bookings?roomId=${encodeURIComponent(roomId)}`
+    `/api/bookings?roomId=${encodeURIComponent(roomId)}${tag}`
   );
 }
 
