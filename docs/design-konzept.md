@@ -63,6 +63,16 @@ Alle Farben werden zentral als shadcn/ui-CSS-Variablen in `frontend/src/index.cs
 
 Gewichte: 400 (Text), 500 (Labels/Betonung), 600 (Buttons, Titel), 700 nur für die Seitenüberschrift bei starker Hierarchie. **Pflicht:** `tabular-nums` für alle Uhrzeiten, Daten und Zahlen in Kalender, Tagesansicht und Berichten – sonst springen die Ziffern im Zeitraster.
 
+## Datum & Uhrzeit
+
+Alle Zeitangaben in der Oberfläche laufen durch den gemeinsamen Formatierer `frontend/src/lib/format.ts` – Referenz-Umsetzung mit Tests in `frontend/test/format.test.ts`. Beide Helfer nehmen `Date` oder ISO-String aus der API entgegen und sind über fest gesetzte Locale `de-DE` und fixe `Intl.DateTimeFormat`-Optionen deterministisch, unabhängig von der Browser-Locale:
+
+- **`formatTime(value)`** → „HH:mm" mit führenden Nullen: „09:05", „17:30", Mitternacht als „00:07" (nie „24:xx").
+- **`formatDate(value)`** → kurzer Wochentag mit Komma plus DD.MM.YYYY: „So., 23.08.2026", „Fr., 21.08.2026".
+- Fehlende oder nicht parsebare Eingabe (`null`, leerer String, Invalid Date) ergibt bei beiden den Platzhalter „–" statt eines Throws – eine einzelne kaputte Angabe soll keine Ansicht crashen.
+
+**Verbindliche Regel:** Kalenderansicht, Buchungsformular und Tagesansicht formatieren Zeit und Datum ausschließlich über diese Helfer. Verteile `toLocaleTimeString`-, `toLocaleDateString`- oder `toLocaleString`-Aufrufe in Ansichten gibt es nicht; neue Ansichten importieren aus `lib/format`, statt eigene Formate einzuführen. Zusammen mit der `tabular-nums`-Pflicht oben gilt das auch für Zeitachsen, Slot-Beschriftungen und Badges in Kalender und Tagesansicht. Abweichende Formate (etwa ein ausgeschriebener Wochentag im Seitenkopf) gehören zuerst hier ins Konzept, dann in den Helfer – nicht als lokale Ausnahme in einer Komponente.
+
 ## Spacing & Layout-Raster
 
 Ausschließlich Tailwinds Spacing-Skala (4-px-Basis), keine freien Pixelwerte.
