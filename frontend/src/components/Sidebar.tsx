@@ -1,5 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { CalendarCheck, DoorOpen, LayoutDashboard, Menu, X } from "lucide-react";
+import {
+  CalendarDays,
+  CalendarCheck,
+  DoorOpen,
+  LayoutDashboard,
+  Menu,
+  X,
+} from "lucide-react";
 
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -25,6 +32,7 @@ interface MenuItem {
 const NAV_ITEMS: MenuItem[] = [
   { to: "/", label: "Übersicht", icon: LayoutDashboard },
   { to: "/rooms", label: "Räume", icon: DoorOpen, end: false },
+  { to: "/day", label: "Tagesansicht", icon: CalendarDays, end: false },
 ];
 
 interface NavItemProps {

@@ -9,6 +9,7 @@ import {
 
 import Sidebar from "./components/Sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import DayView from "./pages/DayView";
 import RoomCalendar from "./pages/RoomCalendar";
 import RoomForm from "./pages/RoomForm";
 import RoomList from "./pages/RoomList";
@@ -55,7 +56,8 @@ function Dashboard() {
           Übersicht
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Raumliste, Tagesansicht und Buchungen folgen in den nächsten Sprints.
+          Raumliste, Tagesansicht und Buchungen wachsen sprintweise – den
+          aktuellen Stand findest du in der Sidebar.
         </p>
       </div>
 
@@ -129,6 +131,12 @@ function Shell() {
               path="/rooms/:id/edit"
               element={<RoomForm mode="edit" />}
             />
+            {/* Tagesansicht (Anforderung 6): Standort als Routensegment,
+                Datum als Suchparameter. Ohne Segment greift der Fallback auf
+                den ersten Standort – der Sidebar-Link zeigt deshalb bewusst
+                auf /day. */}
+            <Route path="/day" element={<DayView />} />
+            <Route path="/day/:locationId" element={<DayView />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
