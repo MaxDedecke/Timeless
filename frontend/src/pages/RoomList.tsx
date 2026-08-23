@@ -120,7 +120,7 @@ function NoMatchesEmpty({ onResetFilters }: { onResetFilters: () => void }) {
   );
 }
 
-function RoomsEmpty({ onRetry }: { onRetry?: () => void }) {
+function RoomsEmpty({ retry }: { retry: () => void }) {
   return (
     <Card
       data-testid="rooms-empty"
@@ -128,17 +128,30 @@ function RoomsEmpty({ onRetry }: { onRetry?: () => void }) {
     >
       <Inbox className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
       <p className="mt-3 text-base font-medium text-card-foreground">
-        Es sind noch keine Räume angelegt.
+        Noch keine Räume angelegt.
       </p>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-        Sobald ein Facility-Manager Räume mit Standort und Kapazität anlegt,
-        erscheinen sie hier.
+        Lege den ersten Raum mit Standort und Kapazität an, damit dein Team ihn
+        finden und buchen kann.
       </p>
-      {onRetry !== undefined && (
-        <Button variant="outline" size="sm" className="mt-5" onClick={onRetry}>
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+        {/* Anlegen-Call-to-action: echter Router-Link wie im Seitenkopf. */}
+        <Button asChild size="sm" data-testid="rooms-empty-create">
+          <Link to="/rooms/new">
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Raum anlegen
+          </Link>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={retry}
+          data-testid="rooms-empty-retry"
+        >
+          <RotateCw className="h-4 w-4" aria-hidden="true" />
           Liste neu laden
         </Button>
-      )}
+      </div>
     </Card>
   );
 }
@@ -327,7 +340,7 @@ export default function RoomList() {
 
       {state.phase === "loading" && <RoomsSkeleton />}
       {state.phase === "error" && <RoomsError onRetry={retry} />}
-      {state.phase === "empty" && <RoomsEmpty onRetry={retry} />}
+      {state.phase === "empty" && <RoomsEmpty retry={retry} />}
       {state.phase === "ready" && visibleRooms.length === 0 && (
         <NoMatchesEmpty onResetFilters={resetFilters} />
       )}

@@ -205,15 +205,37 @@ describe("RoomList – Zustände", () => {
     expect(calledPaths).toContain("/api/amenities");
   });
 
-  it("zeigt einen gestalteten Leerzustand bei leerer Liste", async () => {
+  it("zeigt den Listen-Leerzustand „Noch keine Räume angelegt“ bei leerer Liste", async () => {
     global.fetch = fetchWith([]) as unknown as typeof global.fetch;
     renderRoomList();
 
     const empty = await screen.findByTestId("rooms-empty");
-    expect(empty).toHaveTextContent("Es sind noch keine Räume angelegt.");
+    expect(empty).toHaveTextContent("Noch keine Räume angelegt.");
     expect(screen.queryByTestId("rooms-grid")).not.toBeInTheDocument();
     // Ohne Räume gibt es auch keinen Filter über der Liste.
     expect(screen.queryByTestId("amenity-filter")).not.toBeInTheDocument();
+  });
+
+  it("bietet im Listen-Leerzustand den Anlegen-CTA und das Neuladen der Liste an", async () => {
+    global.fetch = fetchWith([]) as unknown as typeof global.fetch;
+    renderRoomList();
+    await screen.findByTestId("rooms-empty");
+
+    // Anlegen-CTA: echter Link mit Button-Look (asChild), Ziel /rooms/new.
+    const createLink = screen.getByTestId("rooms-empty-create");
+    expect(createLink.tagName).toBe("A");
+    expect(createLink).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/rooms\/new$/)
+    );
+
+    // Neuladen: nächster Abruf liefert Daten → Liste erscheint, Leerzustand weg.
+    global.fetch = fetchApi() as unknown as typeof global.fetch;
+    await userEvent
+      .setup()
+      .click(screen.getByTestId("rooms-empty-retry"));
+    await screen.findByTestId("rooms-grid");
+    expect(screen.queryByTestId("rooms-empty")).not.toBeInTheDocument();
   });
 
   it("zeigt eine Fehlermeldung mit Erneut-versuchen bei API-Fehler", async () => {
