@@ -65,6 +65,13 @@ export class InMemoryDb {
   readonly db: IMemoryDb;
 
   /**
+   * Katalog-Guard gegen den pg-mem-AST-Defekt bei IF-NOT-EXISTS-DDL auf
+   * existierende Objekte – gemeinsam von query() und jedem connect()-Client
+   * genutzt, damit beide Pfade dieselbe Postgres-Semantik haben.
+   */
+  private readonly ifNotExistsGuard: IfNotExistsGuard;
+
+  /**
    * pg-kompatibler Pool über der In-Memory-Datenbank. Bewusst als Pool
    * exponiert (nicht nur die eigene query-Methode): So lässt sich dieselbe
    * Instanz überall dort einsetzen, wo die Services `pool` aus src/db.ts
@@ -74,6 +81,7 @@ export class InMemoryDb {
 
   constructor() {
     this.db = newDb();
+    this.ifNotExistsGuard = new IfNotExistsGuard(this.db);
     registerPgMemCompatibilityStubs(this.db);
     // createPg().Pool ist die Pool-KLASSE – hier muss eine Instanz entstehen,
     // sonst fehlen query/connect/end am Objekt (die Methoden hängen am
@@ -96,11 +104,7 @@ export class InMemoryDb {
   /**
    * Spielt die Migrationsdateien aus src/db/migrations in Dateinamen-
    * Reihenfolge in dieser Instanz ein. Rückgabe: Namen der angewendeten
-   * Dateien (auf einer frischen Instanz beide). Die Dateien sind per
-   * `IF NOT EXISTS`/`ON CONFLICT` zwar idempotent formuliert wie beim
-   * Produktions-Läufer, ein erneuter Lauf auf derselben Instanz scheitert
-   * aber an der unten genannten pg-mem-Grenze – deshalb eine frische
-   * Instanz je Testlauf statt Wiederholung. Jede Instanz startet ohne
+   * Dateien (auf einer frischen Instanz beide). Jede Instanz startet ohne
    * Schema: Der Aufruf liegt bewusst in der Hand des Tests, damit ein Test
    * auch mal gegen ein leeres Schema laufen kann; wer das reale Schema
    * braucht, ruft ihn im Testaufbau auf.
@@ -108,14 +112,13 @@ export class InMemoryDb {
    * Nicht unterstütztes SQL wird nicht geschluckt: Der Fehler wird mit
    * Migrationsdatei und Anweisungsausschnitt als Error nach oben gereicht.
    *
-   * Grenze (empirisch gegen pg-mem 3.0.14 geprüft): Ein erneutes applyMigrations()
-   * auf derselben Instanz scheitert an einem pg-mem-Defekt – `CREATE TABLE
-   * IF NOT EXISTS` gegen bereits existierende Tabelle löst dessen AST-
-   * Coverage-Prüfung aus (NotSupported). Deshalb gilt bewusst der Entwurf
-   * „eine frische Instanz je Testlauf“ statt Wiederholung; die Idempotenz der
-   * Migrationen selbst bleibt Sache des Produktions-Läufers gegen die echte
-   * Postgres. Der optionale Parameter dient ausschließlich Tests dazu, den
-   * Fehlerpfad mit einem Wegwerf-Verzeichnis zu prüfen.
+   * Wiederholtes Ausführen auf derselben Instanz ist möglich: Die Idempotenz
+   * des Migration-SQL (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`) wird über
+   * die Umgehung des pg-mem-AST-Defekts auch auf dem Client-Pfad wirksam
+   * (siehe connect() und isCreateIfNotExists) – ein zweiter Lauf liefert
+   * eine leere Liste, weil schema_migrations die Dateien bereits vermerkt hat.
+   * Der optionale Parameter dient ausschließlich Tests dazu, den Fehlerpfad
+   * mit einem Wegwerf-Verzeichnis zu prüfen.
    */
   async applyMigrations(dir: string = MIGRATIONS_DIR): Promise<string[]> {
     const files = (await readdir(dir))
@@ -160,16 +163,13 @@ export class InMemoryDb {
     sqlText: string,
     values: unknown[] = []
   ): Promise<QueryResult<R>> {
-    // pg-mem-Defekt umgehen (siehe Kommentar an isCreateTableIfNotExists):
+    // pg-mem-Defekt umgehen (siehe Kommentar an isCreateIfNotExists):
     // Einzelstatement-CREATE TABLE IF NOT EXISTS auf existierende Tabelle
-    // wird mit echter Postgres-Semantik als No-op behandelt.
-    if (values.length === 0 && isCreateTableIfNotExists(sqlText)) {
-      const tableName = sqlText.match(CREATE_TABLE_IF_NOT_EXISTS_NAME);
-      if (
-        tableName !== null &&
-        (await tableExistsInSchema(this.db, tableName[1]))
-      ) {
-        return noOpResult("CREATE TABLE");
+    // wird mit echter Postgres-Semantik als No-op behandelt – derselbe
+    // Katalog-Guard wie auf dem Client-Pfad in connect().
+    if (values.length === 0 && isCreateIfNotExists(sqlText)) {
+      if (await this.ifNotExistsGuard.isNoOp(sqlText)) {
+        return this.ifNotExistsGuard.noOp();
       }
     }
     return this.pool.query<R>(sqlText, values as never[]);
@@ -183,7 +183,12 @@ export class InMemoryDb {
    */
   async connect(): Promise<PoolClient> {
     const inner: PoolClient = await this.pool.connect();
-    return wrapWithSnapshotTransactions(inner, this.db);
+    // Derselbe pg-mem-Defekt wie in query(): Der Migrations-Läufer setzt sein
+    // `CREATE TABLE IF NOT EXISTS schema_migrations` über den Client ab –
+    // ohne diese Behandlung scheitert der zweite Lauf an existierenden
+    // Objekten (AST-Coverage-Fehler statt No-op).
+    const guard = new IfNotExistsGuard(this.db);
+    return wrapWithSnapshotTransactions(inner, this.db, guard);
   }
 
   /** Schließt den Pool. Die In-Memory-Datenbank stirbt mit der Instanz. */
@@ -237,13 +242,13 @@ function registerPgMemCompatibilityStubs(db: IMemoryDb): void {
 /**
  * pg-mem 3.0.14 bricht an zwei Stellen am Migrations-SQL:
  *
- * 1. `CREATE TABLE IF NOT EXISTS` gegen eine bereits existierende Tabelle
+ * 1. `CREATE TABLE IF NOT EXISTS` gegen ein bereits existierendes Objekt
  *    wirft dessen AST-Coverage-Fehler ("parts have not been read by the query
  *    planner"), statt stillschweigend nichts zu tun. Der Migrations-Läufer
  *    formuliert seine Systemtabelle aber bewusst idempotent.
  * 2. Mehrstimmige Abfragen (wie eine Migrationsdatei) werden an pg-mems
  *    Multi-Statement-Grenze zerlegt; dort fehlt der Kontext, dass die Datei
- *    bereits gelaufen ist bzw. dass die Tabelle schon existiert.
+ *    bereits gelaufen ist bzw. dass das Objekt schon existiert.
  *
  * Beides ist ein Defekt der In-Memory-Engine, nicht unserer Migrationen:
  * Gegen echte Postgres verhält sich exakt dieses SQL korrekt. Damit der
@@ -253,37 +258,12 @@ function registerPgMemCompatibilityStubs(db: IMemoryDb): void {
  * Raten): Existiert die Tabelle bereits, wird das Statement übersprungen,
  * sonst unverändert ausgeführt.
  */
-function isCreateTableIfNotExists(sqlText: string): boolean {
+function isCreateIfNotExists(sqlText: string): boolean {
   return /^create\s+table\s+if\s+not\s+exists\b/i.test(sqlText.trimStart());
 }
 
 /** Erstes Statement-Kürzel einer Tabelle (Groß-/Kleinschreibung egal). */
-const CREATE_TABLE_IF_NOT_EXISTS_NAME = /create\s+table\s+if\s+not\s+exists\s+"?([a-zA-Z_][\w$]*)"?\s*\(/i;
-
-/** Ergebnisform eines verworfenen DDL-Statements (pg-kompatibel). */
-function noOpResult(command: string): QueryResult {
-  return {
-    command,
-    rowCount: 0,
-    rows: [],
-    fields: [],
-  } as unknown as QueryResult;
-}
-
-/** Tabellenexistenz über den SQL-Katalog prüfen statt raten. */
-async function tableExistsInSchema(
-  db: IMemoryDb,
-  tableName: string
-): Promise<boolean> {
-  // Name stammt aus dem eigenen Regex auf eigenem SQL; Escaping ist
-  // Vorsichtsmaßnahme, kein Vertrauensgrenzen-Feature.
-  const safeName = tableName.replace(/'/g, "''");
-  const rows = await db.public.many(
-    "SELECT table_name FROM information_schema.tables " +
-      `WHERE table_schema = 'public' AND table_name = '${safeName}'`
-  );
-  return rows.length > 0;
-}
+const CREATE_IF_NOT_EXISTS_NAME = /create\s+table\s+if\s+not\s+exists\s+"?([a-zA-Z_][\w$]*)"?\s*\(/i;
 
 /** Steuerungs-SQL, das die Snapshot-Abbildung selbst behandelt. */
 const TX_CONTROL_PATTERNS: Array<{ pattern: RegExp; verb: string }> = [
@@ -292,11 +272,54 @@ const TX_CONTROL_PATTERNS: Array<{ pattern: RegExp; verb: string }> = [
   { pattern: /^(ROLLBACK|ABORT)(\s|;|$)/i, verb: "ROLLBACK" },
 ];
 
+/** Ergebnisform eines verworfenen Steuer-/DDL-Statements (pg-kompatibel). */
+function controlResult(command: string): QueryResult {
+  return {
+    command,
+    rowCount: 0,
+    rows: [],
+    fields: [],
+  } as unknown as QueryResult;
+}
+
+/**
+ * Katalogbasierte Existenzprüfung für `CREATE ... IF NOT EXISTS` – dieselbe
+ * echte Postgres-Semantik wie in query(), nur ohne Umweg über den Pool:
+ * pg-mems AST-Coverage-Defekt trifft das Statement auf existierendem Objekt
+ * (NotSupported), bevor eine Antwort entstehen könnte; der Katalog entscheidet
+ * deshalb hier, ob es als No-op verworfen oder unverändert ausgeführt wird.
+ */
+class IfNotExistsGuard {
+  constructor(private readonly db: IMemoryDb) {}
+
+  /** True, wenn das Statement ein IF-NOT-EXISTS-DDL auf existierendes Objekt ist. */
+  async isNoOp(sqlText: string): Promise<boolean> {
+    if (!isCreateIfNotExists(sqlText)) return false;
+    const name = sqlText.match(CREATE_IF_NOT_EXISTS_NAME);
+    if (name === null) return false;
+    // Name stammt aus dem eigenen Regex auf eigenem SQL; Escaping ist
+    // Vorsichtsmaßnahme, kein Vertrauensgrenzen-Feature.
+    const safeName = name[1].replace(/'/g, "''");
+    const rows = await this.db.public.many(
+      "SELECT table_name FROM information_schema.tables " +
+        `WHERE table_schema = 'public' AND table_name = '${safeName}'`
+    );
+    return rows.length > 0;
+  }
+
+  /** No-op-Ergebnis für ein verworfenes DDL-Statement (pg-Form). */
+  noOp(): QueryResult {
+    return controlResult("CREATE TABLE");
+  }
+}
+
 /**
  * Umhüllt einen Adapter-Client so, dass BEGIN/COMMIT/ROLLBACK echte
  * Transaktionssemantik haben (Snapshot statt pg-mems wirkungsloser
  * Steuerstatements) und alle übrigen Statements unverändert durchgereicht
- * werden.
+ * werden – mit einer Ausnahme: Einzelstatement-`CREATE TABLE IF NOT EXISTS`
+ * auf bereits existierende Tabelle wird wie in echter Postgres als No-op
+ * behandelt (pg-mem-Defekt, siehe isCreateIfNotExists).
  *
  * Grenzen: kein DDL innerhalb einer Transaktion und keine Isolation zwischen
  * gleichzeitig offenen Clients mehrerer Transaktionen (Snapshot gilt pro
@@ -304,17 +327,10 @@ const TX_CONTROL_PATTERNS: Array<{ pattern: RegExp; verb: string }> = [
  */
 function wrapWithSnapshotTransactions(
   inner: PoolClient,
-  db: IMemoryDb
+  db: IMemoryDb,
+  guard: IfNotExistsGuard
 ): PoolClient {
   let snapshot: IBackup | null = null;
-
-  const controlResult = (command: string): QueryResult =>
-    ({
-      command,
-      rowCount: 0,
-      rows: [],
-      fields: [],
-    }) as unknown as QueryResult;
 
   const wrapped = {
     query(sql: string, values?: unknown[]): Promise<QueryResult> {
@@ -338,6 +354,14 @@ function wrapWithSnapshotTransactions(
             }
             return Promise.resolve(controlResult("ROLLBACK"));
         }
+      }
+      if (
+        (values === undefined || values.length === 0) &&
+        isCreateIfNotExists(text)
+      ) {
+        return guard.isNoOp(text).then((skip) =>
+          skip ? guard.noOp() : inner.query(sql, values)
+        );
       }
       return inner.query(sql, values);
     },
