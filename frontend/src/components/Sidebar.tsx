@@ -22,16 +22,17 @@ interface MenuItem {
   to: string;
   label: string;
   icon: typeof DoorOpen;
-  end?: boolean;
 }
 
 // Menüstand: Die Wurzel „/“ leitet auf die Raumliste weiter – der Einstieg
-// IST die Raumliste, ein eigener Übersicht-Punkt wäre doppelt. Spätere
+// IST die Raumliste, ein eigener Übersicht-Punkt wäre doppelt. Bewusst KEIN
+// `end`-Flag: Der aktive Menüpunkt gilt für seinen Bereich inkl. Unterseiten
+// (Konzept, Navigation) – das Raumdetail markiert weiter „Räume“. Spätere
 // Gruppen (Verwalten/Administration) kommen hier hinzu, ohne das Layout
 // anzufassen.
 const NAV_ITEMS: MenuItem[] = [
-  { to: "/rooms", label: "Räume", icon: DoorOpen, end: true },
-  { to: "/day", label: "Tagesansicht", icon: CalendarDays, end: false },
+  { to: "/rooms", label: "Räume", icon: DoorOpen },
+  { to: "/day", label: "Tagesansicht", icon: CalendarDays },
 ];
 
 interface NavItemProps {
@@ -44,7 +45,6 @@ function NavItem({ item, onNavigate }: NavItemProps) {
   return (
     <NavLink
       to={item.to}
-      end={item.end}
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(

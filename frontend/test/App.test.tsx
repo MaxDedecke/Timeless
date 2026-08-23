@@ -119,6 +119,35 @@ describe("App-Shell", () => {
     expect(screen.getByText("Beamer")).toBeInTheDocument();
   });
 
+  it("markiert auf der Unterseite /rooms/1 den Menüpunkt Räume weiter als aktiv", async () => {
+    const backend = mockBackend({
+      body: {
+        room: ROOMS[0],
+        bookings: [],
+      },
+    });
+    global.fetch = backend;
+    window.history.pushState({}, "", "/rooms/1");
+    render(<App />);
+
+    // Der NavLink „Räume“ hat kein `end` – er gilt für den Bereich inkl.
+    // Unterseiten (Konzept, Navigation): Das Raumdetail markiert weiter „Räume“.
+    const nav = await screen.findByRole("navigation", {
+      name: "Hauptnavigation",
+    });
+    const roomsLink = within(nav).getByRole("link", { name: "Räume" });
+    await waitFor(() =>
+      expect(roomsLink).toHaveAttribute("aria-current", "page")
+    );
+
+    // Die Ansicht selbst lädt Raum und Buchungen über relative Pfade.
+    await waitFor(() => expect(backend).toHaveBeenCalledWith("/api/rooms/1", expect.anything()));
+    expect(backend).toHaveBeenCalledWith(
+      "/api/bookings?roomId=1",
+      expect.anything()
+    );
+  });
+
   it("klappt die Sidebar auf schmalen Breiten aus und schließt sie per Menüpunkt", async () => {
     const user = userEvent.setup();
     global.fetch = mockBackend({ body: ROOMS });
