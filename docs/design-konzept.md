@@ -169,6 +169,31 @@ Der Status einer Buchung erscheint in jeder Ansicht als dasselbe Badge – Refer
 
 Genehmigte Buchungen teilen sich bewusst den Bestätigt-Stil (Konzept: gleiche Farbe); „nicht erschienen" bleibt im neutralen Muted-Stil der default-Variante lesbar statt wie eine Ablehnung zu wirken. Ein unbekannter Statuswert wird nicht verschluckt: Er erscheint als Muted-Badge mit Rohtext, damit auffällt, dass die Zuordnung lückenhaft ist – ein neuer Statuswert bekommt zuerst hier eine Tabellenzeile und dann eine Zeile in der Komponente. Raumkalender und Tagesansicht übernehmen diese Zuordnung unverändert statt eigener Varianten.
 
+## Check-in & No-Show
+
+Adressaten dieses Kapitels sind die Umsetzungs-Tickets zu Anforderung 1 (Check-in für die laufende eigene Buchung) und Anforderung 2 (automatische Freigabe bei No-Show) sowie später „Meine Buchungen". Wer den Status wechselt, ist geklärt: Das Backend setzt `eingecheckt` beim Check-in und `nicht erschienen` beim Freigabe-Lauf (Beschluss vom 21.8.2026: Die Buchung bleibt als „nicht erschienen" erhalten, sie wird nicht gelöscht) – die Oberfläche erfindet keinen Zustand, sie rendert ihn. Referenz-Platzierung aller folgenden Regeln ist der Buchungsblock im gemeinsamen TimeGrid (`frontend/src/components/TimeGrid.tsx`); weil Raumkalender (`/rooms/:id`) und Tagesansicht (`/day`) dasselbe Raster speisen, gelten sie damit in beiden Ansichten automatisch und gleichartig.
+
+**Badge-Zuordnung:** Sie steht bereits verbindlich in „Buchungsstatus-Badge" und ist in `BookingStatusBadge.tsx` samt Test umgesetzt; hier nur die Auslegung: `eingecheckt` → `primary` („Eingecheckt", aktiver positiver Endzustand), `nicht erschienen` → `default` (neutraler Muted-Stil, „Nicht erschienen"). „Nicht erschienen" ist ein Endzustand ohne Handlungsbedarf und darf nicht wie eine Ablehnung wirken – deshalb bewusst keine `destructive`-Zuordnung, obwohl der Termin ausgefallen ist. Neue Varianten werden dafür nicht eingeführt; das Inventar von `ui/badge.tsx` kennt ohnehin kein `secondary`/`outline`, und cva rendert unbekannte Variantenwerte still ohne Farbklassen.
+
+**Check-in-Button:**
+
+- **Platzierung:** Im Buchungsblock des laufenden eigenen Termins, in derselben Kopfzeile rechts neben dem Status-Badge (die `flex-wrap`-Anordnung des Blocks bricht bei schmalen Spalten um). Nicht pro Ansicht gebaut, sondern einmal im TimeGrid – Raumkalender und Tagesansicht bekommen das Verhalten dadurch automatisch; „Meine Buchungen" wiederholt dieselbe Aktion später je Zeile.
+- **Aussehen:** shadcn/ui-Button `size="sm"` mit `Check`-Icon (lucide) und Beschriftung „Check-in", kein Icon-Only; auf schmalen Breiten mindestens `h-11` (Touch-Regel, „Responsive-Verhalten"). Die Regel „max. eine Primäraktion pro Sicht" meint die Aktion im Seitenkopf – kontextuelle Inline-Aktionen im Raster fallen nicht darunter, denn in der Tagesansicht können mehrere eigene laufende Buchungen gleichzeitig laufen.
+- **Sichtbarkeit** (alle Bedingungen zugleich, geprüft beim Rendern gegen die aktuelle Uhrzeit):
+  1. **Eigene Buchung** – Urheber ist die angemeldete Person. Solange der Urheber nur als Text geführt wird (bis zur SSO-Klärung), ordnet die Umsetzung zu; an der Ansichtsregel ändert das nichts: Fremde Buchungen zeigen niemals einen Check-in-Button.
+  2. **Laufend** – Beginn ≤ jetzt < Ende. Vor Beginn und nach Ende erscheint die Aktion nicht; der Check-in gehört zur laufenden Buchung, nicht zur kommenden.
+  3. **Noch nicht eingecheckt** – der Status ist nicht bereits `eingecheckt`.
+  4. **Innerhalb der Frist** – jetzt < Beginn + X Minuten; X ist die konfigurierbare No-Show-Frist (Sidebar „Einstellungen"). Liegt die Frist hinter dem Buchungsende, endet das Fenster spätestens mit dem Ende.
+
+  Zusammengefasst: sichtbar genau im Fenster [Beginn, min(Beginn + X, Ende)). Woher das Frontend X kennt (Konfigurations-API oder abgeleitetes Feld der Buchung), legen die Umsetzungs-Tickets fest – die Regeln hier hängen nicht davon ab.
+- **Nach erfolgreichem Check-in:** Der Button entfällt sofort, das Badge wechselt auf „Eingecheckt" (`primary`), der Block bleibt im Beleg-Stil. Erfolgsfeedback als Toast („Check-in erfasst") gemäß Toast-Regel; schlägt die Aktion fehl (etwa weil die Frist zwischenzeitlich abgelaufen ist), erscheint eine kurze destructive Inline-Meldung am Block – kein Toast, denn der Nutzer muss den Fall adressieren – und die Ansicht lädt anschließend ihren Stand neu.
+- Kein Live-Timer als Pflicht: Überschreitet eine offene Ansicht die Frist, korrigiert sich der Zustand spätestens beim nächsten Neuladen oder Datumswechsel. Für die Umsetzung relevant: `TimeGridBooking` führt heute nur `id`, `start`, `end`, `status` – Urheber- und Check-in-Information müssen durch die Spur-Daten gereicht werden, sobald die Tickets das bauen; die API liefert `createdBy` bereits zurück.
+
+**Nach Ablauf der Frist ohne Check-in:**
+
+- Der Freigabe-Lauf setzt den Status `nicht erschienen` und gibt den Zeitraum fachlich frei (die Verfügbarkeitsprüfung zählt ihn fortan nicht mehr als belegt – Backend-Arbeit, hier nur der Randhinweis).
+- **Darstellung im Raster:** Der Block bleibt als Eintrag des Tages sichtbar – erkennbar bleiben soll ja, warum der Raum jetzt wieder frei ist – wechselt aber vom Beleg-Stil in den freien Stil (Muted-Fläche mit gestricheltem Rand wie ein `FreeSlot`) und zeigt das Badge „Nicht erschienen" im neutralen Muted-Stil. Damit ist „erscheint nicht mehr als belegt" (Anforderung 2) auch farblich erfüllt: keine Primary-Tönung mehr, kein Check-in-Button mehr. Dieselbe Darstellung gilt später je Zeile in „Meine Buchungen".
+
 ## Leerzustand
 
 „Noch nichts angelegt" und „Filter liefert keinen Treffer" sind zwei Zustände mit eigenem Text und eigener Aktion (beide in `RoomList.tsx`). Gemeinsame Form: zentrierte shadcn/ui-**Card** (`px-6 py-14 text-center`) mit lucide-Icon (`h-8 w-8 text-muted-foreground`, `aria-hidden`), Kernaussage in `text-base font-medium`, Erläuterung in `text-sm text-muted-foreground`, Aktionen darunter:
