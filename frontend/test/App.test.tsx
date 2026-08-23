@@ -14,9 +14,11 @@ import App from "../src/App";
 
 /**
  * Tests für das App-Shell: Sidebar (Desktop sichtbar, mobil einklappbar,
- * aktiver Menüpunkt markiert) und Verdrahtung der Raumliste unter /rooms.
- * Das Backend wird über global.fetch gemockt – der Test prüft zugleich, dass
- * der Client ausschließlich relative /api-Pfade aufruft.
+ * aktiver Menüpunkt markiert), Redirect der Wurzelroute „/“ auf die
+ * Raumliste (/rooms – kein Systemstatus-Platzhalter mehr) und Verdrahtung
+ * der Raumliste unter /rooms. Das Backend wird über global.fetch gemockt –
+ * der Test prüft zugleich, dass der Client ausschließlich relative
+ * /api-Pfade aufruft.
  */
 
 const ROOMS = [
@@ -48,9 +50,6 @@ function mockBackend(rooms?: { status?: number; body?: unknown }) {
         : input instanceof URL
           ? input.toString()
           : input.url;
-    if (url === "/api/health/ready") {
-      return jsonResponse({ status: "ok", database: "up" });
-    }
     if (url === "/api/rooms") {
       return jsonResponse(rooms?.body ?? [], rooms?.status ?? 200);
     }
@@ -67,20 +66,27 @@ afterEach(() => {
 });
 
 describe("App-Shell", () => {
-  it("rendert die Sidebar mit aktiven Menüpunkt auf der Startseite", async () => {
-    global.fetch = mockBackend();
+  it("leitet die Wurzelroute „/“ auf die Raumliste (/rooms) weiter", async () => {
+    const backend = mockBackend({ body: ROOMS });
+    global.fetch = backend;
     render(<App />);
 
-    const nav = await screen.findByRole("navigation", {
-      name: "Hauptnavigation",
-    });
-    const overview = within(nav).getByRole("link", { name: "Übersicht" });
-    expect(overview).toHaveAttribute("aria-current", "page");
-    expect(within(nav).getByRole("link", { name: "Räume" })).not.toHaveAttribute(
-      "aria-current"
+    // Redirect ist gelaufen, sobald die Raumliste lädt bzw. steht.
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/rooms")
     );
+
+    // Kein Rest des alten Systemstatus-Platzhalters.
     expect(
-      screen.getByRole("heading", { name: "Übersicht", level: 1 })
+      screen.queryByRole("heading", { name: "Systemstatus" })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Übersicht")).not.toBeInTheDocument();
+
+    // Die Liste holt ihre Daten – über den relativen Pfad – und steht da.
+    expect(backend).toHaveBeenCalledWith("/api/rooms", expect.anything());
+    expect(await screen.findByTestId("rooms-grid")).toBeInTheDocument();
+    expect(
+      await within(screen.getByTestId("rooms-grid")).findByText("Atelier Nord")
     ).toBeInTheDocument();
   });
 
@@ -95,9 +101,14 @@ describe("App-Shell", () => {
     });
     const roomsLink = within(nav).getByRole("link", { name: "Räume" });
     await waitFor(() => expect(roomsLink).toHaveAttribute("aria-current", "page"));
+
+    // Kein eigener „Übersicht“-Menüpunkt mehr – „/“ leitet auf /rooms.
     expect(
-      within(nav).getByRole("link", { name: "Übersicht" })
-    ).not.toHaveAttribute("aria-current");
+      within(nav).queryByRole("link", { name: "Übersicht" })
+    ).not.toBeInTheDocument();
+    // Der Raumlisten-Einstieg ist der erste Menüpunkt.
+    const navLinks = within(nav).getAllByRole("link");
+    expect(navLinks[0]).toHaveTextContent("Räume");
 
     // Nur relative /api-Pfade, keine Servicename-Hosts im Client-Fetch.
     // (fetch erhält zusätzlich das AbortSignal aus dem useEffect-Cleanup.)

@@ -8,7 +8,6 @@ import {
 } from "react-router-dom";
 
 import Sidebar from "./components/Sidebar";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import DayView from "./pages/DayView";
 import RoomCalendar from "./pages/RoomCalendar";
 import RoomForm from "./pages/RoomForm";
@@ -22,79 +21,14 @@ import RoomList from "./pages/RoomList";
  * Servicename auf.
  */
 
-interface HealthState {
-  status: string;
-  database?: string;
-}
-
-function Dashboard() {
-  const [health, setHealth] = useState<HealthState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let aktiv = true;
-    fetch("/api/health/ready")
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (aktiv) setHealth(data);
-      })
-      .catch(() => {
-        if (aktiv) setError("Backend nicht erreichbar");
-      });
-    return () => {
-      aktiv = false;
-    };
-  }, []);
-
-  return (
-    <section aria-labelledby="dashboard-heading">
-      <div className="mb-6">
-        <h1 id="dashboard-heading" className="text-2xl font-semibold tracking-tight">
-          Übersicht
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Raumliste, Tagesansicht und Buchungen wachsen sprintweise – den
-          aktuellen Stand findest du in der Sidebar.
-        </p>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg font-semibold">Systemstatus</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm">
-          {error !== null && (
-            <p
-              role="alert"
-              className="rounded-md bg-destructive-background px-3 py-2 text-destructive"
-            >
-              {error}
-            </p>
-          )}
-          {error === null && health === null && (
-            <p className="text-muted-foreground">Status wird geprüft …</p>
-          )}
-          {error === null && health !== null && (
-            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <div className="flex items-center justify-between rounded-md bg-success-background px-3 py-2">
-                <dt className="text-card-foreground">API</dt>
-                <dd className="font-medium text-success">{health.status}</dd>
-              </div>
-              <div className="flex items-center justify-between rounded-md bg-success-background px-3 py-2">
-                <dt className="text-card-foreground">Datenbank</dt>
-                <dd className="font-medium text-success">
-                  {health.database ?? "unbekannt"}
-                </dd>
-              </div>
-            </dl>
-          )}
-        </CardContent>
-      </Card>
-    </section>
-  );
+/**
+ * Wurzelroute: Der frühere Systemstatus-Platzhalter ist entfernt. „/“ leitet
+ * direkt auf die Raumliste weiter (replace, damit kein toter Verlaufseintrag
+ * entsteht) – die URL bleibt konsistent auf /rooms und die Sidebar markiert
+ * dort den Bereich „Räume“ als aktiv.
+ */
+function RootRedirect() {
+  return <Navigate to="/rooms" replace />;
 }
 
 function Shell() {
@@ -117,7 +51,7 @@ function Shell() {
       <main className="px-4 py-6 md:px-6 lg:ml-64 lg:pl-8 lg:pr-6 xl:px-8">
         <div className="mx-auto max-w-7xl">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<RootRedirect />} />
             <Route path="/rooms" element={<RoomList />} />
             {/* Raumkalender je Raum (Anforderung 1): /rooms/:id. Statische
                 Segmente (/rooms/new) schlagen vor dem dynamischen :id zu –
@@ -137,7 +71,9 @@ function Shell() {
                 auf /day. */}
             <Route path="/day" element={<DayView />} />
             <Route path="/day/:locationId" element={<DayView />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Unbekannte Pfade landen wie die Wurzel direkt bei der
+                Raumliste – ohne den Umweg über „/“. */}
+            <Route path="*" element={<Navigate to="/rooms" replace />} />
           </Routes>
         </div>
       </main>

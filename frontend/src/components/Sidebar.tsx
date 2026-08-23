@@ -3,7 +3,6 @@ import {
   CalendarDays,
   CalendarCheck,
   DoorOpen,
-  LayoutDashboard,
   Menu,
   X,
 } from "lucide-react";
@@ -26,12 +25,12 @@ interface MenuItem {
   end?: boolean;
 }
 
-// Menüstand des ersten Sprints: nur Bereiche, die es fachlich schon gibt.
-// Spätere Gruppen (Verwalten/Administration) kommen hier hinzu, ohne das
-// Layout anzufassen.
+// Menüstand: Die Wurzel „/“ leitet auf die Raumliste weiter – der Einstieg
+// IST die Raumliste, ein eigener Übersicht-Punkt wäre doppelt. Spätere
+// Gruppen (Verwalten/Administration) kommen hier hinzu, ohne das Layout
+// anzufassen.
 const NAV_ITEMS: MenuItem[] = [
-  { to: "/", label: "Übersicht", icon: LayoutDashboard },
-  { to: "/rooms", label: "Räume", icon: DoorOpen, end: false },
+  { to: "/rooms", label: "Räume", icon: DoorOpen, end: true },
   { to: "/day", label: "Tagesansicht", icon: CalendarDays, end: false },
 ];
 
