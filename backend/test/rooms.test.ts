@@ -81,14 +81,6 @@ async function seedBooking(
   );
 }
 
-async function countBookings(roomId: number): Promise<number> {
-  const { rows } = await db.query<{ n: number }>(
-    "SELECT COUNT(*)::int AS n FROM bookings WHERE room_id = $1",
-    [roomId]
-  );
-  return rows[0].n;
-}
-
 function bookingBody(roomId: number, startsAt: string, endsAt: string) {
   return {
     roomId,
@@ -228,22 +220,33 @@ function countRecorded(fake: FakePool, pattern: RegExp): number {
 test("listRooms liefert je Raum die zugeordneten Merkmale mit", async () => {
   const session = beginFakeSession();
   const fake = session.fake;
-  const amenityRow = { key: "beamer", label: "Beamer" };
-  // Ein Raum mit Zuordnung, einer ohne: Der Responder gibt pro Raum-ID zurück,
-  // was die korrelierte Merkmals-Subquery in Postgres liefern würde.
-  const amenitiesByRoom = new Map<number, Array<Record<string, unknown>>>([
-    [101, [amenityRow]],
+  // Ein Raum mit Zuordnung, einer ohne: Die Merkmals-Abfrage liefert je
+  // Raum-ID die Join-Zeilen, das Nachladen im Service ordnet sie zu – Räume
+  // ohne Treffer erhalten garantiert ein leeres Array (statt null).
+  const amenitiesByRoom = new Map<number, Array<{ roomId: number; key: string; label: string }>>([
+    [101, [{ roomId: 101, key: "beamer", label: "Beamer" }]],
     [102, []],
   ]);
   fake.respondWith((record) => {
+    const sql = normalizeSql(record.sql);
+    if (/FROM room_amenities ra JOIN amenities a/i.test(sql)) {
+      assert.match(
+        sql,
+        /ORDER BY ra\.room_id, a\.key/i,
+        "Merkmale müssen stabil nach Raum und Schlüssel geordnet geliefert werden"
+      );
+      const ids = record.values as number[];
+      assert.deepEqual(
+        [...ids].sort((a, b) => a - b),
+        [101, 102],
+        "Merkmals-Nachladen fragt nicht genau die gelisteten Räume ab"
+      );
+      return { rows: ids.flatMap((id) => amenitiesByRoom.get(id) ?? []) };
+    }
     assert.match(
       normalizeSql(record.sql),
       /FROM rooms JOIN locations/i,
       "Raumliste fragt nicht den erwarteten Select ab"
-    );
-    assert.ok(
-      normalizeSql(record.sql).includes("COALESCE"),
-      "Raumliste sichert fehlende Zuordnungen nicht per COALESCE ab"
     );
     return {
       rows: [
@@ -328,7 +331,7 @@ test("listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverän
 // In-Memory-DB.
 // ---------------------------------------------------------------------------
 
-/** Zeile des ROOM_WITH_LOCATION_SELECT für einen Raum (Form wie in Postgres). */
+/** Zeile des flachen Basis-Selects für einen Raum (Form wie aus der DB). */
 function roomRow(
   id: number,
   name: string,
@@ -336,14 +339,7 @@ function roomRow(
   capacity: number,
   locationName: string
 ): Record<string, unknown> {
-  return {
-    id,
-    name,
-    locationId,
-    capacity,
-    amenities: [],
-    location: { id: locationId, name: locationName },
-  };
+  return { id, name, locationId, capacity, locationName };
 }
 
 /**
@@ -535,6 +531,10 @@ test("Standort und Kapazität ändern: updateRoom ändert genau diese Felder; di
           "UPDATE muss die neuen Werte und zuletzt die Raum-ID binden"
         );
         return { rows: [], rowCount: 1 };
+      }
+      if (/FROM room_amenities ra JOIN amenities a/i.test(sql)) {
+        // Merkmals-Nachladen des Service – im Fake ohne Zuordnungen.
+        return { rows: [] };
       }
       if (/FROM rooms JOIN locations/i.test(sql)) {
         return {

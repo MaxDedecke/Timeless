@@ -3,6 +3,9 @@ import { pool } from "../db.js";
 import { DomainNotFoundError, ValidationError } from "./errors.js";
 import { parseAmenityKeys, RoomAmenity, setRoomAmenities } from "./amenities.js";
 import type { Location } from "./locations.js";
+// Derselbe Executor-Begriff wie im Buchungs-Service: Pool oder
+// Transaktions-Client – für das gemeinsame Merkmals-Nachladen.
+import type { SqlExecutor } from "./bookings.js";
 
 /**
  * Räume: anlegen, lesen (einzeln und Liste), ändern und auf freie Zeiträume
@@ -45,26 +48,76 @@ export interface RoomWithAmenities extends RoomWithLocation {
   amenities: RoomAmenity[];
 }
 
+/**
+ * Rohe Zeile des Basis-Selects: Der Standort kommt flach (ID + Name) und wird
+ * erst in TypeScript zum eingebetteten Objekt geformt – genau wie die
+ * Ausstattungsmerkmale lädt bzw. formt withAmenities ihn. Bewusst KEINE
+ * JSON-Funktionen im Select: Die In-Memory-DB der Vertragstests (pg-mem)
+ * implementiert weder korrelierte Subqueries über Joins noch jsonb_agg oder
+ * jsonb_build_object; funktional ist die TS-Form identisch.
+ */
+interface RoomBaseRow {
+  id: number;
+  name: string;
+  locationId: number;
+  capacity: number;
+  locationName: string;
+}
+
 // Join über locations: GET /api/rooms liefert je Raum den Standort als
-// eingebettetes Objekt mit (Akzeptanzkriterium des Standort-Tickets).
-// Die Merkmale kommen als jsonb-Array mit (Akzeptanzkriterium dieses Tickets);
-// der korrelierte Subselect sortiert sie nach Schlüssel, damit die Reihenfolge
-// in der Antwort stabil ist. COALESCE: Räume ohne Merkmal liefern [] statt null.
-const ROOM_WITH_LOCATION_SELECT = `
+// eingebettetes Objekt mit (Akzeptanzkriterium des Standort-Tickets). Die
+// Merkmals-Anreicherung übernimmt withAmenities – siehe RoomBaseRow.
+const ROOM_BASE_SELECT = `
   SELECT rooms.id::int AS id,
          rooms.name AS name,
          rooms.location_id::int AS "locationId",
          rooms.capacity,
-         COALESCE(
-           (SELECT jsonb_agg(jsonb_build_object('key', a.key, 'label', a.label) ORDER BY a.key)
-            FROM room_amenities ra
-            JOIN amenities a ON a.id = ra.amenity_id
-            WHERE ra.room_id = rooms.id),
-           '[]'::jsonb
-         ) AS amenities,
-         jsonb_build_object('id', locations.id::int, 'name', locations.name) AS location
+         locations.name AS "locationName"
   FROM rooms
   JOIN locations ON locations.id = rooms.location_id`;
+
+/**
+ * Formt rohe Raumzeilen in die vollständige API-Form: Standort eingebettet,
+ * Ausstattungsmerkmale nachgeladen als Liste von {key, label}. Eine Abfrage
+ * je Aufruf (IN-Liste) statt N korrelierter Subqueries; Räume ohne Zuordnung
+ * erhalten [] statt null (Akzeptanzkriterium „liefert die zugeordneten
+ * Merkmale mit", Reihenfolge stabil nach Schlüssel).
+ *
+ * `exec` ist der Pool oder – innerhalb einer offenen Transaktion – deren
+ * Client, damit Anlegen/Ändern Lesen, INSERT und Nachladen auf derselben
+ * Datenhaltung absetzen (dieselbe Wertung wie findOverlappingBookings im
+ * Buchungs-Service).
+ */
+async function withAmenities(
+  exec: SqlExecutor,
+  rows: RoomBaseRow[]
+): Promise<RoomWithAmenities[]> {
+  if (rows.length === 0) return [];
+  const amenityRows = (
+    await exec.query(
+      `SELECT ra.room_id::int AS "roomId", a.key, a.label
+       FROM room_amenities ra
+       JOIN amenities a ON a.id = ra.amenity_id
+       WHERE ra.room_id IN (${rows.map((_, i) => `${i + 1}`).join(", ")})
+       ORDER BY ra.room_id, a.key`,
+      rows.map((row) => row.id)
+    )
+  ).rows as Array<{ roomId: number; key: string; label: string }>;
+  const byRoom = new Map<number, RoomAmenity[]>();
+  for (const amenityRow of amenityRows) {
+    const list = byRoom.get(amenityRow.roomId) ?? [];
+    list.push({ key: amenityRow.key, label: amenityRow.label });
+    byRoom.set(amenityRow.roomId, list);
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    locationId: row.locationId,
+    capacity: row.capacity,
+    amenities: byRoom.get(row.id) ?? [],
+    location: { id: row.locationId, name: row.locationName },
+  }));
+}
 
 function parseRoomId(raw: unknown): number {
   const id = Number(raw);
@@ -110,10 +163,10 @@ function validateLocationId(raw: unknown): number {
  * mit".)
  */
 export async function listRooms(): Promise<RoomWithAmenities[]> {
-  const { rows } = await pool.query<RoomWithAmenities>(
-    `${ROOM_WITH_LOCATION_SELECT} ORDER BY rooms.name`
+  const { rows } = await pool.query<RoomBaseRow>(
+    `${ROOM_BASE_SELECT} ORDER BY rooms.name`
   );
-  return rows;
+  return withAmenities(pool, rows);
 }
 
 /**
@@ -192,12 +245,25 @@ function parseAvailabilityBound(raw: unknown, label: string): Date {
  * Wirft ValidationError (HTTP 400) bei fehlenden/unlesbaren Zeitangaben und
  * bei `to <= from`.
  */
+
+/** Rohe Zeile des Verfügbarkeits-Selects vor der Merkmals-Zusammenführung. */
+interface AvailableRoomRow {
+  id: number;
+  name: string;
+  locationId: number;
+  capacity: number;
+  locationName: string;
+}
+
 export async function listAvailableRooms(
   input: AvailabilityInput
 ): Promise<RoomWithAmenities[]> {
   const { from, to } = validateAvailabilityInterval(input);
 
-  const { rows } = await pool.query<RoomRow>(
+  // Dieselbe Raumform wie die Raumliste – die Anreicherung (Standort
+  // eingebettet, Merkmale) läuft über denselben gemeinsamen Helfer
+  // (withAmenities), statt die Logik an zwei Stellen zu pflegen.
+  const { rows } = await pool.query<RoomBaseRow>(
     `SELECT r.id::int AS id,
             r.name AS name,
             r.location_id::int AS "locationId",
@@ -213,42 +279,7 @@ export async function listAvailableRooms(
      ORDER BY r.name`,
     [from.toISOString(), to.toISOString()]
   );
-
-  // Merkmale nachladen: eine Abfrage für alle freien Räume (IN-Liste statt
-  // N korrelierten Subqueries), gemappt auf dieselbe {key, label}-Form wie in
-  // der Raumliste; Räume ohne Merkmal erhalten [] statt null.
-  const amenityRows =
-    rows.length === 0
-      ? []
-      : (
-          await pool.query<{
-            roomId: number;
-            key: string;
-            label: string;
-          }>(
-            `SELECT ra.room_id::int AS "roomId", a.key, a.label
-             FROM room_amenities ra
-             JOIN amenities a ON a.id = ra.amenity_id
-             WHERE ra.room_id IN (${rows.map((_, i) => `${i + 1}`).join(", ")})
-             ORDER BY ra.room_id, a.key`,
-            rows.map((row) => row.id)
-          )
-        ).rows;
-  const amenitiesByRoom = new Map<number, RoomAmenity[]>();
-  for (const amenityRow of amenityRows) {
-    const list = amenitiesByRoom.get(amenityRow.roomId) ?? [];
-    list.push({ key: amenityRow.key, label: amenityRow.label });
-    amenitiesByRoom.set(amenityRow.roomId, list);
-  }
-
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    locationId: row.locationId,
-    capacity: row.capacity,
-    amenities: amenitiesByRoom.get(row.id) ?? [],
-    location: { id: row.locationId, name: row.locationName },
-  }));
+  return withAmenities(pool, rows);
 }
 
 /**
@@ -301,14 +332,16 @@ export async function createRoom(
     }
 
     // Standort und Merkmale für die Antwort nachladen (Standort wurde soeben
-    // als existierend geprüft, der Join kann also nicht leer sein).
-    const { rows } = await client.query<RoomWithAmenities>(
-      `${ROOM_WITH_LOCATION_SELECT} WHERE rooms.id = $1`,
+    // als existierend geprüft, der Join kann also nicht leer sein). Das
+    // Merkmals-Nachladen läuft auf demselben Transaktions-Client.
+    const { rows } = await client.query<RoomBaseRow>(
+      `${ROOM_BASE_SELECT} WHERE rooms.id = $1`,
       [roomId]
     );
+    const vollständigeZeile = (await withAmenities(client, rows))[0];
 
     await client.query("COMMIT");
-    return rows[0];
+    return vollständigeZeile;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;
@@ -324,14 +357,14 @@ export async function createRoom(
  */
 export async function getRoom(rawId: unknown): Promise<RoomWithAmenities> {
   const id = parseRoomId(rawId);
-  const { rows } = await pool.query<RoomWithAmenities>(
-    `${ROOM_WITH_LOCATION_SELECT} WHERE rooms.id = $1`,
+  const { rows } = await pool.query<RoomBaseRow>(
+    `${ROOM_BASE_SELECT} WHERE rooms.id = $1`,
     [id]
   );
   if (rows.length === 0) {
     throw new DomainNotFoundError("Raum nicht gefunden.");
   }
-  return rows[0];
+  return (await withAmenities(pool, rows))[0];
 }
 
 /**
@@ -428,14 +461,16 @@ export async function updateRoom(
     }
 
     // Nachladen mit Merkmalen und Standort, damit die Antwort den vollständigen
-    // neuen Zustand abbildet (auch bei leerem PATCH unverändert).
-    const { rows: full } = await client.query<RoomWithAmenities>(
-      `${ROOM_WITH_LOCATION_SELECT} WHERE rooms.id = $1`,
+    // neuen Zustand abbildet (auch bei leerem PATCH unverändert). Auch hier
+    // läuft das Merkmals-Nachladen auf demselben Transaktions-Client.
+    const { rows: full } = await client.query<RoomBaseRow>(
+      `${ROOM_BASE_SELECT} WHERE rooms.id = $1`,
       [id]
     );
+    const vollständigeZeile = (await withAmenities(client, full))[0];
 
     await client.query("COMMIT");
-    return full[0];
+    return vollständigeZeile;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;

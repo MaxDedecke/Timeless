@@ -29,7 +29,18 @@ export function buildDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 
 export let pool: Pool = new Pool(buildDbConfig());
 
-let productionPool: Pool | undefined;
+/**
+ * Stapel der Pool-Naht: Unten liegt der Produktions-Pool, darüber jeder durch
+ * __setPoolForTests eingesetzte Ersatz. Ein Stack statt eines einzelnen
+ * Platzhalters, weil sich die beiden Test-Hilfen ineinander verschachteln:
+ * Eine Suite kann den Pool auf die In-Memory-DB setzen (Datei-Aufbau) und
+ * sich darin lokal den protokollierenden FakePool einsetzen lassen
+ * (FakeDbSession je Test). Restore stellt immer genau die vorherige Stufe
+ * wieder her – bei einer Einzelvariablen würde das erste innere end()
+ * bereits den Produktions-Pool zurückbringen und alle folgenden Zugriffe des
+ * Testlaufs gegen echte Postgres schicken.
+ */
+const poolStack: Pool[] = [];
 
 /**
  * Test-only-Naht für containerlose Unit-Tests: Ersetzt den aktiven Pool,
@@ -42,14 +53,17 @@ let productionPool: Pool | undefined;
  * aller Aufrufer auf Dependency-Injection.
  */
 export function __setPoolForTests(replacement: Pool): void {
-  productionPool ??= pool;
+  if (poolStack.length === 0) {
+    poolStack.push(pool);
+  }
+  poolStack.push(replacement);
   pool = replacement;
 }
 
-/** Gegenstück zu __setPoolForTests: stellt den ursprünglichen Pool wieder her. */
+/** Gegenstück zu __setPoolForTests: stellt den zuvor aktiven Pool wieder her. */
 export function __restorePoolForTests(): void {
-  if (productionPool !== undefined) {
-    pool = productionPool;
-    productionPool = undefined;
+  if (poolStack.length > 1) {
+    poolStack.pop();
+    pool = poolStack[poolStack.length - 1];
   }
 }
