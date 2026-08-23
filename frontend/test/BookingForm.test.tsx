@@ -339,3 +339,44 @@ describe("BookingForm – Submit-Ladezustand", () => {
     expect(screen.queryByTestId("booking-dialog")).not.toBeInTheDocument();
   });
 });
+
+describe("BookingForm – Abbrechen", () => {
+  it("schließt den Dialog per „Abbrechen“, ohne das Formular abzusenden", async () => {
+    const user = userEvent.setup();
+    // Kein onCreate-Handler: Ein versehentlicher POST würde den Test mit
+    // „Unerwarteter POST ohne Handler" brechen lassen.
+    const mock = installBackend({ buchungen: [] });
+    global.fetch = mock as unknown as typeof global.fetch;
+
+    renderAt("/rooms/1");
+    await screen.findByTestId("timegrid-no-bookings");
+    await user.click(screen.getByTestId("room-book-button"));
+    const dialog = await screen.findByTestId("booking-dialog");
+    expect(dialog).toBeInTheDocument();
+
+    // Eingaben stehen lassen: Abbrechen darf sie weder senden noch als
+    // Feldfehler quittieren – der Dialog schließt einfach.
+    fireEvent.change(screen.getByTestId("booking-start"), {
+      target: { value: "09:00" },
+    });
+    await user.type(screen.getByTestId("booking-createdby"), "mitarbeiter@example.com");
+
+    await user.click(screen.getByTestId("booking-cancel"));
+
+    expect(screen.queryByTestId("booking-dialog")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("booking-save-error")).not.toBeInTheDocument();
+
+    // Weder ein POST unterwegs noch ein zweiter Listenabruf ausgelöst –
+    // der Kalender bleibt unverändert im Leerzustand stehen.
+    const posts = mock.mock.calls.filter(
+      ([pfad, init]) =>
+        apiUrl(pfad) === "/api/bookings" && init?.method === "POST"
+    );
+    expect(posts).toHaveLength(0);
+    const listenAbrufe = mock.mock.calls.filter(([pfad]) =>
+      apiUrl(pfad).startsWith("/api/bookings?roomId=1")
+    );
+    expect(listenAbrufe).toHaveLength(1);
+    expect(screen.getByTestId("timegrid-no-bookings")).toBeInTheDocument();
+  });
+});

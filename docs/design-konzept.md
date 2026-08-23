@@ -109,7 +109,7 @@ Durchgängig genutzte shadcn/ui-Komponenten und ihr Einsatzzweck:
 
 - **Button** – Varianten `default` (Primary-Aktion, max. eine pro Sicht), `outline`, `ghost`, `destructive`; Größe `sm` in Tabellenzeilen, `icon` für Symbolaktionen.
 - **Card** – Raumkarte in der Liste, Statistik-Kacheln im Bericht, Empty States.
-- **Dialog** – Buchungsformular, Raum anlegen/bearbeiten, Bestätigungsfragen (insbesondere Serienbearbeitung: „Nur dieser Termin" vs. „Gesamte Serie").
+- **Dialog** – Buchungsformular, kontextuelle Kurzaktionen (z. B. „Buchen“ aus der Freie-Räume-Suche), Bestätigungsfragen (insbesondere Serienbearbeitung: „Nur dieser Termin" vs. „Gesamte Serie"). Ob ein Formular als Dialog oder als eigene Route läuft, regelt „Formularmuster: Dialog vs. Route“.
 - **Table** – Tagesansicht, Berichte, Nutzerverwaltung, Genehmigungsliste.
 - **Form** mit Input, Textarea, Select, Checkbox, Switch – alle Eingaben; Switch für Genehmigungspflicht je Raum und Einstellungen.
 - **Popover + Calendar** – Datumswahl im Buchungsformular und bei Filtern (bislang umgesetzt als natives `type="date"`-Feld, siehe Raumkalender; die Freie-Räume-Suche folgt derselben Praxis).
@@ -234,6 +234,17 @@ Die Umsetzungs-Ansicht zu Anforderung 1 („Freie Räume für einen Wunschzeitra
 - **Fehler:** destructives Alert wie `RoomsError` – Titel „Suche fehlgeschlagen", Beschreibung mit Backend-Meldung, soweit vorhanden (ApiError), sonst dem üblichen Hinweis; Button „Erneut versuchen" (`destructive size="sm"`) stößt denselben Abruf erneut an und setzt die Liste zuvor in den Ladezustand. Der Merkmals-Katalog als sekundäre Quelle meldet weiterhin nur inline in der Filter-Card (siehe oben).
 
 **Responsive-Verhalten:** Ergebnisliste stapelt mobile-first (`grid-cols-1` → `sm:grid-cols-2` → `lg:grid-cols-3` → `xl:grid-cols-4`). Der Filterbereich folgt der Regel „Desktop inline, mobil Sheet": ab `md` steht er inline über der Liste, darunter hinter einem „Filter"-Button in einem `Sheet` (Bestandskomponente der Kernkomponenten-Liste), der die Anzahl aktiver Filter am Button zeigt und sich bei Navigation schließt. Touch-Ziele („Buchen", Filter-Reset) auf kleinen Breiten mindestens `h-11`.
+
+## Formularmuster: Dialog vs. Route
+
+Jedes Formular der Anwendung läuft in genau einem der beiden Muster – die Wahl folgt dem fachlichen Kontext, nicht der Feldanzahl:
+
+- **Dialog im Seitenkontext** (Referenz-Umsetzung: `frontend/src/pages/BookingForm.tsx`, im Raumkalender über den Primärbutton im Seitenkopf geöffnet): Das Formular bezieht seinen Kontext vollständig aus der Ansicht, auf der es liegt, und kehrt mit Erfolg in genau diese Ansicht zurück – der Nutzer bleibt dort, wo er war. Es ist die richtige Form für schnelle, kontextuelle Aktionen mit wenigen Feldern: eine Buchung aus dem Raumkalender oder aus einem Suchtreffer der Freie-Räume-Suche heraus, Bestätigungsfragen (etwa Serienbearbeitung). Der Rahmen ist der shadcn/ui-Dialog mit Overlay und Fokus-Falle; der Seitenkopf der Ansicht bleibt sichtbar und zeigt weiter, worauf sich die Eingabe bezieht.
+- **Eigene Route** (Referenz-Umsetzung: `frontend/src/pages/RoomForm.tsx` unter `/rooms/new` und `/rooms/:id/edit`): Das Formular ist ein eigener Arbeitsschritt mit eigener URL – verlinkbar, mit Browser-Zurück-Navigation und eigener Lade-/Fehlerkette für die Vorausfüllung. Es ist die richtige Form, wenn das Formular ein eigenes Objekt einführt oder dauerhaft ändert und ohne den Kontext der Herkunftsseite auskommt: Entitäten anlegen und bearbeiten (Raum, künftig Standort und Nutzer) sowie mehrstufige oder seltene Aktionen. Erfolg endet mit einer Navigation (hier: zurück zur Raumliste), nicht mit einem Schließen.
+
+**Entscheidungsregel:** Liegt der fachliche Kontext (Raum, gewählter Tag, Suchergebnis) bereits auf der offenen Ansicht und kehrt das Formular nach Erfolg dorthin zurück, läuft es als Dialog. Führt das Formular ein eigenes Objekt ein oder ändert es eines dauerhaft und verdient damit eine eigene, teilbare URL, läuft es als Route. Ein Formular wird nicht parallel in beiden Formen gebaut; braucht eine spätere Ansicht dasselbe Formular in der anderen Form, wird die Form-Logik extrahiert statt kopiert.
+
+**Gemeinsame Pflichten in beiden Formen** (Referenz-Umsetzungen `BookingForm.tsx` und `RoomForm.tsx`): einheitlicher Eingaben-Stil über dieselbe `inputClass` (Tokens, kein Hex-Wert), Feldvalidierungsfehler klein und rot unter dem jeweiligen Feld, Submit-Button beim Speichern deaktiviert mit Inline-Spinner, Server-Fehler als destructives Alert („Speichern fehlgeschlagen“ + konkrete Meldung des Backends), das mit dem nächsten Absenden sofort entfernt wird, und alle Eingaben bleiben beim Fehler erhalten. Der Unterschied liegt ausschließlich im Rahmen (Overlay mit Schließen vs. Route mit Navigation), nie im Zustandsverhalten.
 
 ## Responsive-Verhalten
 

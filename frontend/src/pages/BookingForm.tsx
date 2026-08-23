@@ -271,7 +271,10 @@ export default function BookingForm({
           )}
 
           <DialogFooter className="pt-2">
+            {/* type="button": Ohne Angabe wäre der Button implizit ein Submit
+                und würde beim Klick das Formular zusätzlich absenden. */}
             <Button
+              type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
               disabled={speichert}
