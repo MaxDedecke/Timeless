@@ -1,31 +1,48 @@
 # Sprint 1 – Review
 
-Sprint-Ziel: „Funktionsfähige Grundanwendung mit Docker-Setup, Raumverwaltung inkl. Ausstattung und gefilterter Raumliste.“ Das Ziel wurde erreicht; die automatische Integrationsprüfung (voller Stack) ist bestanden, die Anwendung läuft als Compose-Umgebung mit Frontend-, Backend- und Postgres-Container.
+**Sprint-Ziel:** Funktionsfähige Grundanwendung mit Docker-Setup, Raumverwaltung inkl. Ausstattung und gefilterter Raumliste. **Das Ziel wurde erreicht** – die automatische Integrationsprüfung lief mit vollem Stack erfolgreich (Dienst „frontend", Port 32962).
 
 ## Was geliefert wurde
-- **Lauffähige Grundanwendung:** Docker-Compose mit eigenen Containern für Frontend, Backend/API und Postgres. Zwei Startblocker wurden behoben (Dockerfile kopierte proxy.mjs nicht in die Build-Stufe; der Proxy setzte einen ungültigen Host-Header und schoss den Frontend-Container beim ersten /api-Aufruf ab) – letzteres mit Regressionstest abgesichert. Die abschließende Integrationsprüfung bestätigt den vollen Stack als erreichbar.
-- **Datenbasis:** Migrationen für Standorte und Räume (Fremdschlüssel rooms.location_id NOT NULL, Index für die spätere Tagesansicht) sowie für Ausstattungsmerkmale. Umgesetzt gemäß Ihrer Beschlüsse vom 21.8.: Standorte als verwaltete Objekte, Merkmale als fester Katalog mit vorbereiteter Erweiterbarkeit.
-- **API:** Standorte anlegen/lesen/ändern; Räume anlegen (POST), als Liste lesen (mit eingebettetem Standort und Merkmalsarray), einzeln lesen und ändern (PUT/PATCH). Pflichtfeld-Validierung im Service mit verständlichen 400-Meldungen, 404 für unbekannte Räume/Standorte, alles in Transaktionen.
-- **Frontend:** Design-System-Grundlage mit Tailwind/shadcn; Sidebar als Hauptnavigation (aktiver Menüpunkt markiert, mobil Off-Canvas); Raumliste mit Name, Standort, Kapazität und Ausstattungs-Badges inkl. Lade-, Leere- und Fehlerzuständen; Ausstattungsfilter mit AND-Logik, Reset und eigenen Leerzuständen; Formular-Routen /rooms/new und /rooms/:id/edit mit Zugängen aus der Liste und Refetch nach Rückkehr.
-- **Tests:** Eine In-Memory-Postgres-Testnaht (pg-mem) mit echtem Migrationsschema und Isolation je Instanz wurde aufgebaut; alle Backend-Suites wurden dagegen umgestellt, Skip-Platzhalter sind entfallen. Backend-Suite 35 Tests grün, Frontend-Suite grün, lint beider Container grün. Die Umstellung deckte einen echten Produktionsbug auf: In updateRoom fehlte ein $-Platzhalter – jede Raumänderung mit Feldänderung wäre gegen echte Postgres mit 500 fehlgeschlagen. Behoben und per Test gesichert.
 
-Damit sind die Anforderungen 1 (Räume verwalten), 2 (Ausstattung pflegen) und 3 (nach Ausstattung filtern) abgedeckt.
+**Betriebsgrundlage (Anforderung 1–3 teilweise vorbereitet):**
+- Docker-Compose mit eigenen Containern für Frontend, Backend und Postgres. Drei Startblocker wurden behoben: fehlendes `COPY` der Proxy-Datei im Frontend-Dockerfile, ein abstürzender Host-Header im API-Proxy (mit Regressionstest gesichert) und hart verdrahtete Backend-Adressen im Frontend – das Proxy-Ziel kommt jetzt ausschließlich aus `BACKEND_ORIGIN`.
+
+**Datenmodell und Backend:**
+- Migrationen für Standorte und Räume (mit Fremdschlüssel und Index), Standorte sind gemäß Beschluss vom 21.8. verwaltete Objekte, nicht Freitext.
+- REST-API: Standorte anlegen/lesen/ändern; Räume anlegen, lesen, ändern (PUT/PATCH) mit Pflichtfeld-Validierung (Name, Kapazität > 0, existierender Standort → sonst 400 mit verständlicher Meldung).
+- Ausstattungsmerkmale sind an die Raum-API angebunden (anlegen, ersetzen, entfernen; fester Katalog lt. Beschluss vom 21.8.), die Raumliste liefert die Merkmale je Raum mit – Räume ohne Merkmale erhalten ein leeres Array statt null.
+
+**Frontend (Tailwind/shadcn):**
+- Sidebar-Navigation mit sichtbarer Aktivmarkierung, auf schmalen Breiten als Off-Canvas-Panel.
+- Raumliste mit Name, Standort, Kapazität, Merkmals-Badges inkl. Leerzustand, sowie Lade- und Fehlerzuständen.
+- Ausstattungsfilter mit UND-Logik über mehrere Merkmale (Anforderung 3).
+- Formular-Routen `/rooms/new` und `/rooms/:id/edit`, Anlegen-Button und Bearbeiten-Links in der Liste, Refetch nach Rückkehr aus dem Formular (Anforderung 1).
+
+**Test-Infrastruktur:**
+- pg-mem-basierte In-Memory-Postgres als Testnaht; Migrationen laufen dort real, alle Backend-Suiten wurden umgestellt, die Fake-DB-Naht ist entfernt. Letzte dokumentierte Stände: Backend 35/35, Frontend 31/31 Tests grün; die abschließende automatische Prüfung meldete alle Prüf-Skripte erfolgreich.
+- Die neue Naht hat einen echten Produktionsfehler aufgedeckt: Im `updateRoom` fehlte ein `$`-Platzhalter – jede Raum-Änderung gegen echte Postgres wäre mit 500 gescheitert. Behoben.
 
 ## Was offen blieb (und warum)
-Gegenüber dem Sprint-Ziel ist nichts offen. Drei ehrliche Randnotizen:
-- Das Ticket „TS2307-Importfehler in fake-pool.ts“ endete mit einem roten Prüf-Lauf. Die betroffene Hilfsdatei wurde anschließend zusammen mit der alten Fake-DB-Testnaht komplett entfernt, die finale Gesamtsuite läuft grün. Entsprechend Ihrem Beschluss vom 23.8. haben wir das Ticket obsolet geschlossen, statt es erneut anzulaufen – der fragliche Code existiert nicht mehr.
-- Das Ticket „Raumformular zum Anlegen und Bearbeiten“ hinterließ in seiner Runde keine Änderungen (Zeit während der Kontextanalyse abgelaufen); die Lieferung kam über die Folgetickets (Routen, Zugänge, Tests). Ein dokumentierter Ende-zu-Ende-Nachweis „Raum im Browser gegen den laufenden Stack speichern“ liegt nicht vor – die Rendering-Tests decken Vorausfüllung und Fehlerzustand ab. Falls gewünscht, holen wir den Nachweis als kleines Ticket nach.
-- Mehrere Tickets brauchten mehrere Anläufe (u. a. Sidebar-Umsetzung, diverse Testtickets). Die Ursachen – rote Backend-Lint-Läufe, jsdom-Stolpersteine, veraltete Ist-Stands-Annahmen der Ticketausgaben – sind behoben bzw. dokumentiert; der Endstand ist stabil.
 
-Planmäßig offen (nicht Teil dieses Sprint-Ziels): Buchungskern inkl. Konfliktprüfung, freie-Raum-Suche, Kalender-/Tagesansicht, Check-in/No-Show, Genehmigungswesen, Rollen, E-Mail/iCal, Display-Schnittstelle, Auslastungsbericht.
+- **Vier Tickets wurden ohne Ergebnis-Zusammenfassung geschlossen** (amenities.test.ts, TS2307 in fake-pool.ts, Standort-/Raum-API-Tests umstellen, FakeDbSession entfernen). Drei davon mit grüner automatischer Prüfung. Beim TS2307-Ticket war der letzte Prüf-Lauf rot; gemäß Ihrem Beschluss vom 23.8. („kurz verifizieren, dann obsolet schließen") wurde es geschlossen, da die betroffene Testnaht inzwischen komplett entfernt ist und die finale Gesamtsuite grün lief. Restrisiko sehe ich als gering, benenne es aber der Vollständigkeit halber.
+- **Die Test-Infrastruktur-Umstellung hat deutlich mehr Anläufe gekostet als geplant** (mehrere Tickets mit 6–9 Anläufen, zwei manuelle Abbrüche) – jeweils auf Ihre Beschlüsse hin erneut angelaufen und jetzt abgeschlossen. Für die Planung: Testnaht-Arbeit ist im Sprint 1 der Aufwandstreiber gewesen.
+- **Ihre Zulieferungen stehen noch aus:** Der Beschluss vom 23.8. war, beide Fragen (Testdaten statt realer Raumliste, SSO/Login-Verfahren) direkt zu beantworten. Die konkreten Antworten sind im Sprint nicht dokumentiert. Ohne die Login-Antwort ist Sprint 2 nicht sauber planbar (Buchender als Urheber ist Akzeptanzkriterium der Buchungs-Anforderung).
+- **Konzept-Klärungen ohne die die Folge-Module nicht startklar sind:** Anzahl Standorte/Räume zum Start; ob Ausstattungsgegenstände (Beamer, Kamera) später eigene buchbare Objekte werden; Betrieb (eigene Infrastruktur vs. gehostet, Backup-/Ausfallkonzept – vor Produktivbetrieb, nicht sprintkritisch).
+- **Nicht im Sprint 1 enthalten (war nicht Ziel):** Buchungskern, Kalenderansichten, Konfliktprüfung, Check-in/No-Show, Genehmigungsworkflow, Rollen, E-Mail/iCal, Display-API, Auslastungsbericht.
 
 ## Wo der Auftraggeber gefragt ist
-1. **Kunden-Zulieferungen (Konzept-Blocker):** Sie hatten am 23.8. entschieden, beide offenen Fragen direkt zu beantworten. Wir brauchen: (a) konkrete Testdaten statt der realen Raum-/Ausstattungsliste – entweder Sie benennen Beispiel-Standorte/-Räume oder geben uns frei, passende Testdaten selbst festzulegen; (b) die Login-Entscheidung (einfacher E-Mail-Login für den Test vs. SSO). Solange sie fehlen, planen wir die betroffenen Module nicht ein.
-2. **Offene Fachfrage aus Ihrem Beschluss vom 21.8.:** Sollen Admins Ausstattungsmerkmale künftig selbst verwalten dürfen? Aktuell gilt weiter der feste Katalog; die Entscheidung kann jederzeit als Zusatz-Ticket nachkommen, ohne Umbau.
-3. **Priorisierung für Sprint 2:** Wir schlagen den Buchungskern vor (siehe unten) – bitte Ziel freigeben oder anders gewichten.
+
+1. **Login-Verfahren und Testdaten:** Bitte die beiden Antworten vom 23.8. bestätigen bzw. nachliefern. Falls SSO nicht bis Sprint-Start entschieden ist: Reicht für die Testphase der im Konzept vorgesehene einfache E-Mail-Login, mit SSO als Nachzug? Das müssten Sie absegnen.
+2. **Für die nächsten Sprints:** Wie viele Standorte/Räume zum Start (betrifft Testdaten und Tagesansicht)? Sollen Ausstattungsgegenstände irgendwann eigene buchbare Objekte sein? Diese Datenmodell-Frage ist jetzt günstig zu entscheiden, später teurer.
+3. **Offene Fachfrage, drängt nicht:** Soll der Merkmalskatalog später von Admins selbst verwaltet werden (lt. Beschluss vom 21.8. als mögliches Zusatz-Ticket)? Bitte einfach mitentscheiden oder auf Eis lassen.
 
 ## Empfehlung für den nächsten Sprint
-Sprint 2 als **Buchungskern**: Räume für Zeiträume buchen (Anf. 7), Konfliktprüfung gegen Doppelbuchungen inkl. gleichzeitig abgesendeter Requests (Anf. 8, als einziges „Dringend“-Ticket das Kernstück), freie Räume für einen Wunschzeitraum (Anf. 4), Kalenderansicht je Raum (Anf. 5) und Tagesansicht je Standort (Anf. 6). Die in diesem Sprint gebaute In-Memory-DB-Naht erlaubt dafür realistische Datenbanktests (Überlappungen, Race Conditions) ohne Container – genau dafür wurde sie errichtet. Wiederkehrende Buchungen (Anf. 9/10) schlagen wir für den Sprint danach vor. Parallel sollten die Antworten zu Testdaten und Login eingezogen werden, damit Folge module nicht warten müssen.
+
+**Sprint 2 auf den Buchungskern legen.** Zielvorschlag: „Ein Mitarbeiter kann einen Raum für einen Zeitraum buchen; Doppelbuchungen sind technisch ausgeschlossen; der Raumkalender zeigt die Belegung."
+
+- Tickets: Buchung anlegen (Anf. 7), **Konfliktprüfung (Anf. 8 – dringend, Priorität)**, freie Räume für Wunschzeitraum (Anf. 4), Kalenderansicht je Raum (Anf. 5); die Tagesansicht (Anf. 6) dazu, sofern die Kapazität reicht.
+- Voraussetzung: die Login-Klärung aus Punkt 1 oben – ohne sie fehlt der Buchende.
+- Danach in dieser Reihenfolge: Rollenmodell (Anf. 15/16), wiederkehrende Buchungen (Anf. 9/10), Check-in/No-Show (Anf. 11/12 – dort ist Ihr Beschluss umzusetzen, dass die Buchung als „nicht erschienen" erhalten bleibt), Genehmigungsworkflow (Anf. 13/14, Anforderung 13 ist als Ihre Entscheidung bestätigt).
 
 ## Anhang: Integrationsprüfung (voller Stack)
-Bestanden. Voller Stack erreichbar (Dienst „frontend", Port 32961).
+Bestanden. Voller Stack erreichbar (Dienst „frontend", Port 32962).
