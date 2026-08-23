@@ -155,6 +155,20 @@ Zwei getrennte Fälle, beide über shadcn/ui-**Alert** mit `variant="destructive
 
 Feldvalidierungsfehler sind kein Alert-Fall: Sie stehen klein und rot (`text-xs text-destructive`) unter dem jeweiligen Feld (siehe „Zustände"). Buchungsformular, Raumkalender und Tagesansicht übernehmen beide Fälle unverändert statt eigene Varianten zu erfinden.
 
+## Buchungsstatus-Badge
+
+Der Status einer Buchung erscheint in jeder Ansicht als dasselbe Badge – Referenz-Umsetzung: `frontend/src/components/BookingStatusBadge.tsx`. Die Komponente mappt den Datenbank-Textwert (Migration 003: Kleinschreibung ohne Umlaute) auf eine feste Badge-Variante und ein deutsches Anzeige-Label; Raumkalender, Tagesansicht, „Meine Buchungen" und die Genehmigungsliste rendern sie direkt, statt Badge-Varianten lokal zu wählen oder Statuswerte roh anzuzeigen. Die Varianten stammen aus dem semantischen Inventar von `ui/badge.tsx` und setzen damit das Fachliche Status-Mapping aus „Farbpalette" um – der Ticketvorschlag (default/secondary/outline) war zum Zeitpunkt der Umsetzung bereits vom semantischen Inventar abgelöst (eine Outline-Variante existiert im Badge-Inventar nicht):
+
+| Status (Datenbank) | Label | Badge-Variante |
+|---|---|---|
+| `bestaetigt`, `genehmigt` | Bestätigt / Genehmigt | `success` |
+| `ausstehend` | Ausstehend | `warning` |
+| `abgelehnt` | Abgelehnt | `destructive` |
+| `eingecheckt` | Eingecheckt | `primary` |
+| `nicht erschienen` | Nicht erschienen | `default` (neutraler Muted-Stil) |
+
+Genehmigte Buchungen teilen sich bewusst den Bestätigt-Stil (Konzept: gleiche Farbe); „nicht erschienen" bleibt im neutralen Muted-Stil der default-Variante lesbar statt wie eine Ablehnung zu wirken. Ein unbekannter Statuswert wird nicht verschluckt: Er erscheint als Muted-Badge mit Rohtext, damit auffällt, dass die Zuordnung lückenhaft ist – ein neuer Statuswert bekommt zuerst hier eine Tabellenzeile und dann eine Zeile in der Komponente. Raumkalender und Tagesansicht übernehmen diese Zuordnung unverändert statt eigener Varianten.
+
 ## Leerzustand
 
 „Noch nichts angelegt" und „Filter liefert keinen Treffer" sind zwei Zustände mit eigenem Text und eigener Aktion (beide in `RoomList.tsx`). Gemeinsame Form: zentrierte shadcn/ui-**Card** (`px-6 py-14 text-center`) mit lucide-Icon (`h-8 w-8 text-muted-foreground`, `aria-hidden`), Kernaussage in `text-base font-medium`, Erläuterung in `text-sm text-muted-foreground`, Aktionen darunter:
