@@ -1,6 +1,10 @@
 import type { PoolClient } from "pg";
 import { pool } from "../db.js";
-import { ConflictError, ValidationError } from "./errors.js";
+import {
+  ConflictError,
+  DomainNotFoundError,
+  ValidationError,
+} from "./errors.js";
 
 /**
  * Buchungen: anlegen mit Konfliktprüfung (Anforderung 1).
@@ -102,11 +106,27 @@ export async function listBookingsForRoom(
     const day = parseDay(date);
     if (day === null) return [];
     values.push(day.from.toISOString(), day.until.toISOString());
+    // Parameterplatzhalter je gebundenem Wert ($n) – ohne Dollarzeichen wird
+    // aus dem Platzhalter eine Zahlkonstante und die Abfrage ist unbrauchbar
+    // („cannot cast type integer to timestamp with time zone").
+    const bisPlatzhalter = "$" + values.length;
+    const vonPlatzhalter = "$" + (values.length - 1);
     conditions.push(
-      `starts_at < ${values.length}::timestamptz`,
-      `ends_at > ${values.length - 1}::timestamptz`
+      "starts_at < " + bisPlatzhalter + "::timestamptz",
+      "ends_at > " + vonPlatzhalter + "::timestamptz"
     );
   }
+
+  // Existenz zuerst klären: Eine unbekannte Raum-ID ist „nicht gefunden"
+  // (404, dieselbe Wertung wie getRoom) und keine stille leere Liste – sonst
+  // zeigte der Kalender einen gelöschten Raum als frei an.
+  const existing = await pool.query("SELECT 1 FROM rooms WHERE id = $1", [
+    roomId,
+  ]);
+  if ((existing.rowCount ?? 0) === 0) {
+    throw new DomainNotFoundError("Raum nicht gefunden.");
+  }
+
   const { rows } = await pool.query(
     `${BOOKING_SELECT}
      WHERE ${conditions.join(" AND ")}

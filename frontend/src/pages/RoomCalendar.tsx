@@ -405,26 +405,46 @@ export default function RoomCalendar() {
   const [reloadTick, setReloadTick] = useState(0);
 
   const ladeAlles = useCallback(async (signal: AbortSignal) => {
-    try {
-      if (!raumIdGueltig) {
-        setLoadState({ phase: "error", message: "Raum nicht gefunden." });
-        return;
-      }
-      const [raum, liste] = await Promise.all([
-        getRoom(parsedId),
-        listBookingsForRoom(parsedId),
-      ]);
-      if (signal.aborted) return;
-      setLoadState({ phase: "ready", room: raum });
-      setBuchungen(liste);
-    } catch (err) {
-      if ((err as Error)?.name === "AbortError") return; // Unmount/Neuladen
-      const message =
-        err instanceof ApiError && err.status === 404
-          ? "Raum nicht gefunden."
-          : "Der Server ist momentan nicht erreichbar oder meldet einen Fehler.";
-      setLoadState({ phase: "error", message });
+    if (!raumIdGueltig) {
+      setLoadState({ phase: "error", message: "Raum nicht gefunden." });
+      return;
     }
+    // Raum und Buchungen parallel holen, aber die Fehler DETERMINISTISCH
+    // werten: Ein 404 des Raums gewinnt gegen jede andere Ablehnung (z. B.
+    // eine gestörte Buchungsliste), damit eine unbekannte Raum-ID immer die
+    // verständliche „nicht gefunden"-Meldung zeigt und nie zufällig den
+    // generischen Serverfehler – je nachdem, welcher Request zuerst abbricht.
+    const [raumErgebnis, buchungenErgebnis] = await Promise.allSettled([
+      getRoom(parsedId),
+      listBookingsForRoom(parsedId),
+    ]);
+    if (signal.aborted) return; // Unmount/Neuladen
+    const ablehnungen = [raumErgebnis, buchungenErgebnis].filter(
+      (ergebnis): ergebnis is PromiseRejectedResult =>
+        ergebnis.status === "rejected"
+    );
+    if (
+      ablehnungen.some(
+        (ablehnung) =>
+          ablehnung.reason instanceof ApiError && ablehnung.reason.status === 404
+      )
+    ) {
+      setLoadState({ phase: "error", message: "Raum nicht gefunden." });
+      return;
+    }
+    if (ablehnungen.length > 0) {
+      setLoadState({
+        phase: "error",
+        message:
+          "Der Server ist momentan nicht erreichbar oder meldet einen Fehler.",
+      });
+      return;
+    }
+    setLoadState({
+      phase: "ready",
+      room: (raumErgebnis as PromiseFulfilledResult<Room>).value,
+    });
+    setBuchungen((buchungenErgebnis as PromiseFulfilledResult<Booking[]>).value);
   }, [parsedId, raumIdGueltig]);
 
   useEffect(() => {
