@@ -128,12 +128,18 @@ function renderAt(path: string): void {
   render(<App />);
 }
 
-async function warteAufFormular(): Promise<void> {
-  await screen.findByTestId("booking-form-card");
+/** Öffnet den Buchungsdialog über den „Raum buchen"-Button im Seitenkopf. */
+async function oeffneDialog(
+  user: ReturnType<typeof userEvent.setup>
+): Promise<void> {
+  await screen.findByTestId("room-book-button");
+  await user.click(screen.getByTestId("room-book-button"));
+  const dialog = await screen.findByTestId("booking-dialog");
+  expect(dialog).toBeInTheDocument();
   expect(screen.getByTestId("booking-form")).toBeInTheDocument();
 }
 
-/** Füllt Start/Ende/Urheber und sendet ab (Zeitfelder via change-Event). */
+/** Füllt Start/Ende/Urheber im offenen Dialog und sendet ab (Zeiten via change). */
 async function fuelleUndSende(
   user: ReturnType<typeof userEvent.setup>,
   start = "09:00",
@@ -311,7 +317,6 @@ describe("RoomCalendar – Buchung anlegen und sofort sehen", () => {
       },
     });
     renderAt("/rooms/1");
-    await warteAufFormular();
 
     // Leerfall zuerst: Hinweisband sichtbar, noch kein belegter Slot.
     await screen.findByTestId("timegrid-no-bookings");
@@ -319,6 +324,7 @@ describe("RoomCalendar – Buchung anlegen und sofort sehen", () => {
       screen.queryByTestId("timegrid-slot-booked")
     ).not.toBeInTheDocument();
 
+    await oeffneDialog(user);
     await fuelleUndSende(user);
 
     // Der POST trug Raum, Tag des Kalenders und Zeiten als UTC-ISO.
@@ -339,9 +345,9 @@ describe("RoomCalendar – Buchung anlegen und sofort sehen", () => {
       screen.queryByTestId("timegrid-no-bookings")
     ).not.toBeInTheDocument();
 
-    // Formular ist wieder bedienbar (keine Fehlermeldung, Spinner weg).
+    // Bei Erfolg ist der Dialog geschlossen, es bleibt keine Fehlermeldung.
     expect(screen.queryByTestId("booking-save-error")).not.toBeInTheDocument();
-    expect(screen.getByTestId("booking-submit")).toBeEnabled();
+    expect(screen.queryByTestId("booking-dialog")).not.toBeInTheDocument();
   });
 
   it("zeigt einen Doppelbuchungs-Konflikt (409) als verständliches Alert und lässt das Formular offen", async () => {
@@ -355,8 +361,7 @@ describe("RoomCalendar – Buchung anlegen und sofort sehen", () => {
         ),
     });
     renderAt("/rooms/1");
-    await warteAufFormular();
-
+    await oeffneDialog(user);
     await fuelleUndSende(user);
 
     const fehler = await screen.findByTestId("booking-save-error");
@@ -366,8 +371,9 @@ describe("RoomCalendar – Buchung anlegen und sofort sehen", () => {
       "Der Raum ist im gewählten Zeitraum bereits gebucht."
     );
     // Keine stille Ablehnung: Der Kalender zeigt weiter den Leerzustand,
-    // das Formular bleibt mit Eingaben offen.
+    // der Dialog bleibt offen und wieder bedienbar.
     expect(screen.queryByTestId("timegrid-slot-booked")).not.toBeInTheDocument();
+    expect(screen.getByTestId("booking-dialog")).toBeInTheDocument();
     expect(screen.getByTestId("booking-form")).toBeInTheDocument();
     expect(screen.getByTestId("booking-submit")).toBeEnabled();
   });
@@ -376,7 +382,7 @@ describe("RoomCalendar – Buchung anlegen und sofort sehen", () => {
     const user = userEvent.setup();
     const mock = installKalenderBackend({ buchungen: [] });
     renderAt("/rooms/1");
-    await warteAufFormular();
+    await oeffneDialog(user);
 
     // Leeres Formular absenden: Feldfehler unter den Feldern, kein POST.
     await user.click(screen.getByTestId("booking-submit"));

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import BookingForm from "./BookingForm";
 import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -11,24 +12,13 @@ import {
 } from "lucide-react";
 
 import { ApiError } from "../api/http";
-import {
-  createBooking,
-  listBookingsForRoom,
-  type Booking,
-} from "../api/bookings";
+import { listBookingsForRoom, type Booking } from "../api/bookings";
 import { getRoom, type Room } from "../api/rooms";
 import TimeGrid, { type TimeGridLane } from "../components/TimeGrid";
 import { formatDate } from "../lib/format";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card";
 
 /**
  * Raumkalender (/rooms/:id): zeigt die Buchungen eines Raums zeitlich geordnet
@@ -39,10 +29,12 @@ import {
  * laut Konzept: Skeleton beim Laden (in Rasterform über TimeGrid), destructives
  * Alert bei Ladefehlern mit „Erneut versuchen" und Rückweg zur Raumliste,
  * Leere als Hinweisband über dem sichtbaren Gitter (freie Fenster sind
- * fachliches Ergebnis, kein Fehler). Unter dem Kalender liegt das Buchungs-
- * formular: Speichern läuft gegen die bestehende Anlegen-API inklusive
- * Konfliktprüfung (409 erscheint als verständliches Alert), danach wird die
- * Buchungsliste neu geladen, sodass die neue Buchung unmittelbar erscheint.
+ * fachliches Ergebnis, kein Fehler). Über den „Raum buchen"-Primärbutton im
+ * Seitenkopf öffnet sich der Buchungsdialog (pages/BookingForm.tsx): Speichern
+ * läuft gegen die bestehende Anlegen-API inklusive Konfliktprüfung (409
+ * erscheint im Dialog als verständliches Alert), bei Erfolg schließt der
+ * Dialog und die Buchungsliste wird neu geladen, sodass die neue Buchung
+ * unmittelbar im Zeitgitter steht.
  */
 
 /** Heutiges Datum als „YYYY-MM-DD" (UTC) – Default des Datumswechslers. */
@@ -175,223 +167,14 @@ function Ladefehler({ meldung, onRetry }: LadefehlerProps) {
   );
 }
 
-interface BuchungsFormularProps {
-  raumId: number;
-  /** Gewählter Kalendertag als „YYYY-MM-DD" – Buchungen gelten für diesen Tag. */
-  datum: string;
-  /** Wird nach erfolgreicher Speicherung aufgerufen: Kalender neu laden. */
-  onGespeichert: () => void;
-}
 
-interface FeldFehler {
-  start?: string;
-  ende?: string;
-  urheber?: string;
-}
 
-/**
- * Buchungsformular dieses Raums: Datum kommt vom Datumswechsler, Start/Ende
- * und Urheber werden hier erfasst. Beim Speichern prüft das Backend Pflicht-
- * felder, Raumexistenz und Überschneidungen – ein Konflikt (HTTP 409) erscheint
- * als destructives Alert mit der Backend-Meldung, das Formular bleibt offen.
- */
-function BuchungsFormular({
-  raumId,
-  datum,
-  onGespeichert,
-}: BuchungsFormularProps) {
-  const [start, setStart] = useState("");
-  const [ende, setEnde] = useState("");
-  const [urheber, setUrheber] = useState("");
-  const [feldFehler, setFeldFehler] = useState<FeldFehler>({});
-  const [speicherFehler, setSpeicherFehler] = useState<string | null>(null);
-  const [speichert, setSpeichert] = useState(false);
 
-  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    // Alte Meldung sofort entfernen – auch wenn die Validierung abbricht
-    // (Konzept „Speicherfehler im Formular").
-    setSpeicherFehler(null);
-
-    const fehler: FeldFehler = {};
-    if (start === "") {
-      fehler.start = "Bitte gib eine Startzeit ein.";
-    }
-    if (ende === "") {
-      fehler.ende = "Bitte gib eine Endzeit ein.";
-    }
-    if (urheber.trim() === "") {
-      fehler.urheber = "Bitte gib deine E-Mail-Adresse als Urheber an.";
-    }
-    if (
-      fehler.start === undefined &&
-      fehler.ende === undefined &&
-      start !== "" &&
-      ende !== "" &&
-      ende <= start
-    ) {
-      fehler.ende = "Die Endzeit muss nach der Startzeit liegen.";
-    }
-    setFeldFehler(fehler);
-    if (Object.keys(fehler).length > 0) return;
-
-    // ISO mit explizitem Z-Suffix: Der Server parst sonst in seiner lokalen
-    // Zeitzone; „YYYY-MM-DD" + „HH:mm" ergeben so eindeutig UTC.
-    setSpeichert(true);
-    try {
-      await createBooking({
-        roomId: raumId,
-        startsAt: `${datum}T${start.slice(0, 5)}:00Z`,
-        endsAt: `${datum}T${ende.slice(0, 5)}:00Z`,
-        createdBy: urheber.trim(),
-      });
-      setStart("");
-      setEnde("");
-      onGespeichert();
-    } catch (err) {
-      setSpeicherFehler(
-        err instanceof ApiError
-          ? err.message
-          : "Beim Speichern ist ein Fehler aufgetreten. Bitte versuche es erneut."
-      );
-    } finally {
-      setSpeichert(false);
-    }
-  };
-
-  return (
-    <Card className="mt-8" data-testid="booking-form-card">
-      <CardHeader>
-        <CardTitle className="text-lg font-semibold">Raum buchen</CardTitle>
-        <CardDescription>
-          Zeitraum am {formatDate(`${datum}T12:00:00Z`)} angeben – überschneidende
-          Buchungen werden abgelehnt.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          data-testid="booking-form"
-          noValidate
-          onSubmit={onSubmit}
-          className="space-y-4"
-        >
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label htmlFor="booking-start" className="text-sm font-medium">
-                Start
-              </label>
-              <input
-                id="booking-start"
-                data-testid="booking-start"
-                type="time"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
-                className={inputClass}
-                aria-invalid={feldFehler.start !== undefined}
-                aria-describedby={
-                  feldFehler.start !== undefined ? "booking-start-error" : undefined
-                }
-              />
-              {feldFehler.start !== undefined && (
-                <p
-                  id="booking-start-error"
-                  data-testid="booking-start-error"
-                  className="text-xs text-destructive"
-                >
-                  {feldFehler.start}
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="booking-end" className="text-sm font-medium">
-                Ende
-              </label>
-              <input
-                id="booking-end"
-                data-testid="booking-end"
-                type="time"
-                value={ende}
-                onChange={(e) => setEnde(e.target.value)}
-                className={inputClass}
-                aria-invalid={feldFehler.ende !== undefined}
-                aria-describedby={
-                  feldFehler.ende !== undefined ? "booking-end-error" : undefined
-                }
-              />
-              {feldFehler.ende !== undefined && (
-                <p
-                  id="booking-end-error"
-                  data-testid="booking-end-error"
-                  className="text-xs text-destructive"
-                >
-                  {feldFehler.ende}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="booking-created-by" className="text-sm font-medium">
-              Urheber (E-Mail)
-            </label>
-            {/* Solange die SSO-Klärung beim Kunden läuft, führt der Urheber als
-                Text weiter – dieselbe Semantik wie POST /api/bookings. */}
-            <input
-              id="booking-created-by"
-              data-testid="booking-createdby"
-              type="text"
-              value={urheber}
-              onChange={(e) => setUrheber(e.target.value)}
-              placeholder="name@designfreak.de"
-              className={inputClass}
-              aria-invalid={feldFehler.urheber !== undefined}
-              aria-describedby={
-                feldFehler.urheber !== undefined
-                  ? "booking-createdby-error"
-                  : undefined
-              }
-            />
-            {feldFehler.urheber !== undefined && (
-              <p
-                id="booking-createdby-error"
-                data-testid="booking-createdby-error"
-                className="text-xs text-destructive"
-              >
-                {feldFehler.urheber}
-              </p>
-            )}
-          </div>
-
-          {speicherFehler !== null && (
-            <Alert variant="destructive" data-testid="booking-save-error">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Speichern fehlgeschlagen</AlertTitle>
-              <AlertDescription>{speicherFehler}</AlertDescription>
-            </Alert>
-          )}
-
-          <div className="flex justify-end pt-2">
-            <Button type="submit" disabled={speichert} data-testid="booking-submit">
-              {speichert && (
-                <span
-                  className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-                  aria-hidden="true"
-                  data-testid="booking-save-spinner"
-                />
-              )}
-              <CalendarPlus className="h-4 w-4" aria-hidden="true" />
-              Buchung speichern
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function RoomCalendar() {
   const params = useParams();
   const [datum, setDatum] = useState<string>(heuteIso());
+  const [dialogOffen, setDialogOffen] = useState(false);
 
   // Raum-ID aus der Route; nicht-numerische IDs werden ohne unnötigen Request
   // direkt wie ein 404 behandelt (gleiche Semantik wie die API).
@@ -523,6 +306,14 @@ export default function RoomCalendar() {
             </p>
           )}
         </div>
+        {/* Primäraktion im Seitenkopf (Konzept „Spacing & Layout-Raster"):
+            öffnet den Buchungsdialog, sobald der Raum bereit ist. */}
+        {loadState.phase === "ready" && (
+          <Button onClick={() => setDialogOffen(true)} data-testid="room-book-button">
+            <CalendarPlus className="h-4 w-4" aria-hidden="true" />
+            Raum buchen
+          </Button>
+        )}
         <Button variant="ghost" asChild>
           <Link to="/rooms">Zurück zur Raumliste</Link>
         </Button>
@@ -542,9 +333,11 @@ export default function RoomCalendar() {
             onRetry={nochmalLaden}
           />
           {loadState.phase === "ready" && (
-            <BuchungsFormular
+            <BookingForm
               raumId={loadState.room.id}
-              datum={datum}
+              kalenderDatum={datum}
+              open={dialogOffen}
+              onOpenChange={setDialogOffen}
               onGespeichert={() => void buchungenNeuLaden()}
             />
           )}
