@@ -225,7 +225,7 @@ export default function DayView() {
           >
             Tagesansicht
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm tabular-nums text-muted-foreground">
             {state.phase === "ready" ? (
               <>
                 {formatDate(`${datum}T12:00:00Z`)}
