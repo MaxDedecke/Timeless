@@ -226,6 +226,87 @@ test("POST /api/bookings weist ungültige Eingaben mit 400 und Meldung ab", asyn
 });
 
 // ---------------------------------------------------------------------------
+// Teil 1b: API – GET /api/bookings?roomId= (Kalenderansicht je Raum,
+// Anforderung 1): Buchungen eines Raums zeitlich geordnet, optional auf
+// einen Tag begrenzt.
+// ---------------------------------------------------------------------------
+
+test("GET /api/bookings liefert die Buchungen eines Raums aufsteigend nach Beginn", async () => {
+  const roomId = await createTestRoom("GET Liste");
+  // Bewusst unsortiert anlegen: die Antwort muss nach starts_at geordnet sein.
+  await seedBooking(roomId, "2026-10-10T14:00:00Z", "2026-10-10T15:00:00Z");
+  await seedBooking(roomId, "2026-10-10T09:00:00Z", "2026-10-10T10:30:00Z");
+
+  const res = await request(app).get(`/api/bookings?roomId=${roomId}`);
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body));
+  assert.equal(res.body.length, 2);
+  assert.equal(res.body[0].startsAt, "2026-10-10T09:00:00.000Z");
+  assert.equal(res.body[0].endsAt, "2026-10-10T10:30:00.000Z");
+  assert.equal(res.body[1].startsAt, "2026-10-10T14:00:00.000Z");
+  // Vollständige Felder für die Kalenderansicht: Urheber und Status mit.
+  assert.equal(res.body[0].roomId, roomId);
+  assert.equal(res.body[0].createdBy, "vorhanden@example.com");
+  assert.equal(res.body[0].status, "bestaetigt");
+});
+
+test("GET /api/bookings trennt Räume: Buchungen anderer Räume erscheinen nicht", async () => {
+  const roomA = await createTestRoom("GET Raum A");
+  const roomB = await createTestRoom("GET Raum B");
+  await seedBooking(roomA, "2026-10-11T10:00:00Z", "2026-10-11T11:00:00Z");
+
+  const resB = await request(app).get(`/api/bookings?roomId=${roomB}`);
+  assert.equal(resB.status, 200);
+  assert.deepEqual(resB.body, []);
+
+  const resA = await request(app).get(`/api/bookings?roomId=${roomA}`);
+  assert.equal(resA.body.length, 1);
+  assert.equal(resA.body[0].roomId, roomA);
+});
+
+test("GET /api/bookings?date= begrenzt auf Buchungen, die diesen Tag schneiden", async () => {
+  const roomId = await createTestRoom("GET Tagesfilter");
+  await seedBooking(roomId, "2026-10-12T08:00:00Z", "2026-10-12T09:30:00Z"); // im Tag
+  await seedBooking(roomId, "2026-10-13T08:00:00Z", "2026-10-13T09:30:00Z"); // Folgetag
+
+  const res = await request(app).get(
+    `/api/bookings?roomId=${roomId}&date=2026-10-12`
+  );
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 1);
+  assert.equal(res.body[0].startsAt, "2026-10-12T08:00:00.000Z");
+});
+
+test("GET /api/bookings ohne Buchungen liefert eine leere Liste, mit ungültiger Raum-ID 404", async () => {
+  const roomId = await createTestRoom("GET Leer");
+  const res = await request(app).get(`/api/bookings?roomId=${roomId}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, []);
+
+  const unknown = await request(app).get("/api/bookings?roomId=99999999");
+  assert.equal(unknown.status, 404);
+  assert.match(unknown.body.error, /Raum nicht gefunden/);
+
+  // Nicht-numerische und fehlende Raum-ID: ebenfalls „nicht gefunden",
+  // kein roher 500.
+  const notNumeric = await request(app).get("/api/bookings?roomId=abc");
+  assert.equal(notNumeric.status, 404);
+  const missing = await request(app).get("/api/bookings");
+  assert.equal(missing.status, 404);
+});
+
+test("GET /api/bookings mit unlesbarem date liefert eine leere Liste statt eines Fehlers", async () => {
+  const roomId = await createTestRoom("GET Kaputtes Datum");
+  await seedBooking(roomId, "2026-10-14T10:00:00Z", "2026-10-14T11:00:00Z");
+
+  const res = await request(app).get(
+    `/api/bookings?roomId=${roomId}&date=kein-datum`
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, []);
+});
+
+// ---------------------------------------------------------------------------
 // Teil 2: Service-Ebene – die Überschneidungsprüfung als eigenständige,
 // wiederverwendbare Funktion (Grundlage für Serienbuchungen) und die
 // Fachfehler der Service-Funktion.

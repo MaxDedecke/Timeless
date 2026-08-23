@@ -4,9 +4,36 @@ import {
   DomainNotFoundError as NotFoundError,
   ValidationError,
 } from "../services/errors.js";
-import { BookingInput, createBooking } from "../services/bookings.js";
+import {
+  BookingInput,
+  createBooking,
+  listBookingsForRoom,
+} from "../services/bookings.js";
 
 const router = Router();
+
+// GET /api/bookings?roomId=<id>&date=<YYYY-MM-DD> – Buchungen eines Raums,
+// optional auf einen Tag begrenzt (Kalenderansicht je Raum, Anforderung 1).
+// Eine unbekannte oder nicht-numerische Raum-ID gilt wie beim Raumdetail als
+// „nicht gefunden" (404) – der Kalender zeigt dann den Raum-Fehlerzustand.
+router.get("/", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawRoomId = req.query.roomId;
+    const roomId = Number(rawRoomId);
+    if (
+      rawRoomId === undefined ||
+      typeof rawRoomId !== "string" ||
+      !Number.isInteger(roomId)
+    ) {
+      throw new NotFoundError("Raum nicht gefunden.");
+    }
+    const date =
+      typeof req.query.date === "string" ? req.query.date : undefined;
+    res.json(await listBookingsForRoom(roomId, date));
+  } catch (err) {
+    next(err);
+  }
+});
 
 // POST /api/bookings – Buchung mit Raum, Zeitraum und Urheber anlegen.
 // Die Validierung und die Konfliktprüfung liegen im Service; Verstöße kommen

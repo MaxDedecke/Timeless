@@ -67,6 +67,55 @@ function toBooking(row: BookingRow): Booking {
   };
 }
 
+/**
+ * Liest den Tag aus einem „YYYY-MM-DD"-String als UTC-Intervall [Tagbeginn,
+ * nächste-Mitternacht). Andere Formen (leer, „kein Datum", mit Uhrzeit)
+ * gelten wie in der Raum-ID-Prüfung als nicht gefunden – der Kalender zeigt
+ * dann schlicht nichts, statt einen Serverfehler zu riskieren.
+ */
+function parseDay(rawDate: string): { from: Date; until: Date } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rawDate);
+  if (match === null) return null;
+  const from = new Date(`${rawDate}T00:00:00.000Z`);
+  if (Number.isNaN(from.getTime())) return null;
+  const until = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+  return { from, until };
+}
+
+/**
+ * Listet die Buchungen eines Raums auf, optional auf einen Tag begrenzt.
+ *
+ * Grundlage der Kalenderansicht je Raum (Anforderung 1) und später der
+ * Tagesansicht je Standort sowie des iCal-Abos: Der Client bekommt alle
+ * Buchungen mit Start-/Endzeit, Urheber und Status, sortiert nach Beginn.
+ * Ohne `date` liefert die Funktion ALLE Buchungen des Raums – die Ansichten
+ * filtern clientseitig auf ihren dargestellten Tag, damit ein Datumswechsel
+ * ohne erneuten Request möglich ist.
+ */
+export async function listBookingsForRoom(
+  roomId: number,
+  date?: string
+): Promise<Booking[]> {
+  const conditions = ["room_id = $1"];
+  const values: unknown[] = [roomId];
+  if (date !== undefined) {
+    const day = parseDay(date);
+    if (day === null) return [];
+    values.push(day.from.toISOString(), day.until.toISOString());
+    conditions.push(
+      `starts_at < ${values.length}::timestamptz`,
+      `ends_at > ${values.length - 1}::timestamptz`
+    );
+  }
+  const { rows } = await pool.query(
+    `${BOOKING_SELECT}
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY starts_at`,
+    values
+  );
+  return rows.map((row) => toBooking(row as BookingRow));
+}
+
 function validateRoomId(raw: unknown): number {
   // Auch null explizit abweisen: Number(null) wäre 0 und fiele durch den
   // Ganzzahl-Test nur scheinbar hindurch.

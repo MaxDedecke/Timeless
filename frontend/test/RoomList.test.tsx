@@ -32,12 +32,12 @@ if (typeof window.ResizeObserver === "undefined") {
  * Ausstattungsfilter (Ein-Merkmal, kombiniert AND, Zurücksetzen, keine
  * Treffer), die Merkmalsanzeige je Raum als Badge inkl. definiertem
  * Leerzustand für Räume ohne Merkmale und der Zugang zur Raumverwaltung:
- * „Raum anlegen" verweist auf /rooms/new, jede Raumkarte trägt einen
- * Bearbeiten-Link /rooms/:id/edit, und nach der Rückkehr aus dem Formular
- * zeigt die Liste den neuen bzw. geänderten Raum (Refetch beim Mount). Das
- * Backend wird über global.fetch gemockt; die Pfad-Prüfung stellt sicher,
- * dass ausschließlich relative /api-Pfade aufgerufen werden (keine
- * Compose-Servicenamen im Browser-Code).
+ * „Raum anlegen" verweist auf /rooms/new, jede Raumkarte trägt den
+ * Kalender-Zugang (/rooms/:id) und einen Bearbeiten-Link /rooms/:id/edit,
+ * und nach der Rückkehr aus dem Formular zeigt die Liste den neuen bzw.
+ * geänderten Raum (Refetch beim Mount). Das Backend wird über global.fetch
+ * gemockt; die Pfad-Prüfung stellt sicher, dass ausschließlich relative
+ * /api-Pfade aufgerufen werden (keine Compose-Servicenamen im Browser-Code).
  */
 
 /** Direkte Renders von RoomList brauchen Router-Kontext für die Links. */
@@ -133,6 +133,34 @@ function fetchWith(rooms: typeof ROOMS) {
 function fetchFail() {
   return vi.fn(async (_input: RequestInfo | URL): Promise<Response> => {
     throw new Error("Netzwerk weg");
+  });
+}
+
+/**
+ * Backend-Mock der Raumkalender-Routen (/rooms/:id): Raumdetail plus dessen
+ * Buchungsliste über /api/rooms/:id und /api/bookings?roomId=… – Räume
+ * wahlweise leer (unbekannte ID → 404 mit Meldung).
+ */
+function fetchKalenderMock(rooms: typeof ROOMS = ROOMS) {
+  return vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    if (url.startsWith("/api/bookings?roomId=")) {
+      return jsonResponse([]);
+    }
+    if (url.startsWith("/api/rooms/")) {
+      const id = Number(url.slice("/api/rooms/".length));
+      const raum = rooms.find((r) => r.id === id);
+      if (raum === undefined) {
+        return jsonResponse({ error: "Raum nicht gefunden." }, 404);
+      }
+      return jsonResponse(raum);
+    }
+    throw new Error(`Unerwarteter API-Pfad: ${url}`);
   });
 }
 
@@ -396,12 +424,13 @@ describe("RoomList – Merkmalsanzeige je Raum", () => {
 });
 
 /**
- * Zugang zur Raumverwaltung: „Raum anlegen" im Seitenkopf ist ein echter Link
- * auf /rooms/new, jede Raumkarte trägt einen raumspezifischen
- * Bearbeiten-Link /rooms/:id/edit, und beim erneuten Mount (Rückkehr aus dem
- * Formular) wird frisch geholt, sodass neue bzw. geänderte Räume erscheinen.
+ * Zugang zur Raumverwaltung und zum Raumkalender: „Raum anlegen" im Seitenkopf
+ * ist ein echter Link auf /rooms/new, jede Raumkarte trägt den Kalender-Zugang
+ * (/rooms/:id) und den Bearbeiten-Link (/rooms/:id/edit), und beim erneuten
+ * Mount (Rückkehr aus dem Formular) wird frisch geholt, sodass neue bzw.
+ * geänderte Räume erscheinen.
  */
-describe("RoomList – Anlegen-/Bearbeiten-Zugang", () => {
+describe("RoomList – Anlegen-/Bearbeiten-/Kalender-Zugang", () => {
   it("zeigt den „Raum anlegen“-Button sichtbar und verweist auf /rooms/new", async () => {
     global.fetch = fetchWith([]) as unknown as typeof global.fetch;
     window.history.pushState({}, "", "/rooms");
@@ -419,7 +448,7 @@ describe("RoomList – Anlegen-/Bearbeiten-Zugang", () => {
     );
   });
 
-  it("trägt je Raum einen Bearbeiten-Link mit raumspezifischer Ziel-URL", async () => {
+  it("trägt je Raum Kalender- und Bearbeiten-Link mit raumspezifischen Ziel-URLs", async () => {
     global.fetch = fetchApi() as unknown as typeof global.fetch;
     renderRoomList();
 
@@ -427,18 +456,28 @@ describe("RoomList – Anlegen-/Bearbeiten-Zugang", () => {
     const cards = within(grid).getAllByTestId("room-card");
     expect(cards).toHaveLength(3);
 
-    for (const room of ROOMS) {
-      const link = within(grid).getByTestId(`room-edit-${room.id}`);
-      expect(link.tagName).toBe("A");
-      expect(link).toHaveAttribute(
+    for (let i = 0; i < ROOMS.length; i += 1) {
+      const room = ROOMS[i];
+      // Bearbeiten: /rooms/:id/edit wie bisher.
+      const bearbeiten = within(grid).getByTestId(`room-edit-${room.id}`);
+      expect(bearbeiten.tagName).toBe("A");
+      expect(bearbeiten).toHaveAttribute(
         "href",
         expect.stringMatching(new RegExp(`/rooms/${room.id}/edit$`))
       );
+      // Neu in diesem Ticket: Kalender-Zugang auf die Raumansicht /rooms/:id.
+      const kalender = within(grid).getByTestId(`room-calendar-${room.id}`);
+      expect(kalender.tagName).toBe("A");
+      expect(kalender).toHaveAttribute(
+        "href",
+        expect.stringMatching(new RegExp(`/rooms/${room.id}$`))
+      );
+      // Jede Karte genau diese beiden Zugänge – keine Karte ohne einen davon.
+      expect(within(cards[i]).getAllByRole("link")).toHaveLength(2);
     }
-    // Jede Karte genau einen solchen Link – keine Karte ohne Zugang.
-    for (const card of cards) {
-      expect(within(card).getAllByRole("link")).toHaveLength(1);
-    }
+    expect(within(grid).getAllByTestId(/^room-calendar-/)).toHaveLength(
+      ROOMS.length
+    );
   });
 
   it("holt bei Rückkehr aus dem Formular neu und zeigt den angelegten bzw. geänderten Raum", async () => {
@@ -495,11 +534,63 @@ describe("RoomList – Anlegen-/Bearbeiten-Zugang", () => {
     });
     expect(roomsCalls).toHaveLength(2);
 
-    // Auch der neue Raum trägt den Bearbeiten-Zugang.
-    expect(within(grid).getByTestId("room-edit-4")).toHaveAttribute(
+    // Auch der neue Raum trägt den Kalender-Zugang.
+    expect(within(grid).getByTestId("room-calendar-4")).toHaveAttribute(
       "href",
-      expect.stringMatching(/\/rooms\/4\/edit$/)
+      expect.stringMatching(/\/rooms\/4$/)
     );
+  });
+});
+
+/**
+ * Raumkalender-Routen (/rooms/:id): Die Karten-Links führen nicht ins Leere –
+ * unter der Route lädt die Ansicht Raumkopf (Name, Standort, Kapazität,
+ * Merkmale) plus Zeitraster des Raums; eine unbekannte ID zeigt den
+ * verständlichen Fehlerzustand mit Rückweg zur Raumliste. Die Buchungsliste
+ * kommt über den relativen Pfad /api/bookings?roomId=….
+ */
+describe("Raumkalender-Routen", () => {
+  it("öffnet unter /rooms/1 den Raumkalender mit Raumkopf und Zeitraster", async () => {
+    const backend = fetchKalenderMock();
+    global.fetch = backend as unknown as typeof global.fetch;
+    window.history.pushState({}, "", "/rooms/1");
+    render(<App />);
+
+    // Raumkopf: Name als Seitenüberschrift, Standort, Kapazität, Merkmale.
+    expect(
+      await screen.findByRole("heading", { name: "Atelier Nord", level: 1 })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Werkhaus")).toBeInTheDocument();
+    expect(screen.getByText(/12/)).toBeInTheDocument();
+    expect(screen.getByText("Beamer")).toBeInTheDocument();
+
+    // Genau eine Spur für diesen Raum im Zeitraster.
+    await screen.findByTestId("timegrid-grid");
+    expect(screen.getByTestId("timegrid-lane-1")).toBeInTheDocument();
+    expect(screen.getAllByTestId("timegrid-lane-title-1")).toHaveLength(1);
+
+    // Buchungsliste kommt über den relativen Pfad mit Raumfilter.
+    const pfade = backend.mock.calls.map(
+      (aufruf: unknown[]) => aufruf[0] as string
+    );
+    expect(pfade).toContain("/api/bookings?roomId=1");
+    expect(pfade).toContain("/api/rooms/1");
+  });
+
+  it("zeigt bei unbekannter Raum-ID eine verständliche Fehlermeldung statt eines rohen Fehlers", async () => {
+    global.fetch = fetchKalenderMock([]);
+    window.history.pushState({}, "", "/rooms/999");
+    render(<App />);
+
+    const fehler = await screen.findByTestId("room-calendar-error");
+    expect(fehler).toHaveTextContent("Kalender konnte nicht geladen werden");
+    expect(fehler).toHaveTextContent("Raum nicht gefunden.");
+    expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
+
+    // Rückweg aus dem Fehlerzustand: Link zurück zur Raumliste.
+    expect(
+      within(fehler).getByRole("link", { name: "Zurück zur Raumliste" })
+    ).toHaveAttribute("href", expect.stringMatching(/\/rooms$/));
   });
 });
 

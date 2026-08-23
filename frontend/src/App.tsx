@@ -9,6 +9,7 @@ import {
 
 import Sidebar from "./components/Sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import RoomCalendar from "./pages/RoomCalendar";
 import RoomForm from "./pages/RoomForm";
 import RoomList from "./pages/RoomList";
 
@@ -116,6 +117,10 @@ function Shell() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/rooms" element={<RoomList />} />
+            {/* Raumkalender je Raum (Anforderung 1): /rooms/:id. Statische
+                Segmente (/rooms/new) schlagen vor dem dynamischen :id zu –
+                in React Router eindeutig, kein Konflikt. */}
+            <Route path="/rooms/:id" element={<RoomCalendar />} />
             {/* Anlegen und Bearbeiten: /rooms/new muss VOR /rooms/:id/edit
                 nicht ausweichen, kollidiert aber auch nicht – statisch vor
                 dynamischem Segment ist in React Router eindeutig. */}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle,
+  CalendarDays,
   Inbox,
   MapPin,
   Pencil,
@@ -226,19 +227,33 @@ function RoomCard({ room }: { room: Room }) {
             ))
           )}
         </div>
-        {/* Zugang zur Raumverwaltung: raumspezifische Bearbeiten-URL. */}
-        <Button
-          asChild
-          variant="outline"
-          size="sm"
-          className="self-start"
-          data-testid={`room-edit-${room.id}`}
-        >
-          <Link to={`/rooms/${room.id}/edit`}>
-            <Pencil className="h-4 w-4" aria-hidden="true" />
-            Bearbeiten
-          </Link>
-        </Button>
+        {/* Zugang zum Raumkalender (Anforderung 1) und zur Raumverwaltung:
+            raumspezifische URLs /rooms/:id und /rooms/:id/edit. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            asChild
+            size="sm"
+            className="self-start"
+            data-testid={`room-calendar-${room.id}`}
+          >
+            <Link to={`/rooms/${room.id}`}>
+              <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              Kalender
+            </Link>
+          </Button>
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className="self-start"
+            data-testid={`room-edit-${room.id}`}
+          >
+            <Link to={`/rooms/${room.id}/edit`}>
+              <Pencil className="h-4 w-4" aria-hidden="true" />
+              Bearbeiten
+            </Link>
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
