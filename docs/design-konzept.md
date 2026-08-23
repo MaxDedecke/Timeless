@@ -92,7 +92,7 @@ Die Sidebar ist die Hauptnavigation – dauerhaft vorhanden, auch wenn einzelne 
 **Aufbau (links, `w-64`, dunkler Neutral-Hintergrund `hsl(213 30% 14%)` mit hellem Text):**
 
 - Kopf: Produktname „Timeless" mit kleinem Uhr-/Raum-Logo.
-- Gruppe **Buchen**: „Räume" (Liste + Filter, Landeseite nach Login), „Tagesansicht", „Meine Buchungen" (inkl. Check-in und Status eigener Anfragen).
+- Gruppe **Buchen**: „Räume" (Liste + Filter, Landeseite nach Login), „Freie Räume" (Suche nach Zeitraum und Ausstattung, Route `/free` – Details im Kapitel „Freie-Räume-Suche"), „Tagesansicht", „Meine Buchungen" (inkl. Check-in und Status eigener Anfragen).
 - Gruppe **Verwalten** (nur Facility-Manager und Admin): „Genehmigungen", „Raumverwaltung", „Auslastungsberichte".
 - Gruppe **Administration** (nur Admin): „Nutzer & Rollen", „Einstellungen" (u. a. No-Show-Frist).
 - Fuß: angemeldete Person mit Namenskürzel-Avatar und Rollen-Badge, darunter „Abmelden".
@@ -112,7 +112,7 @@ Durchgängig genutzte shadcn/ui-Komponenten und ihr Einsatzzweck:
 - **Dialog** – Buchungsformular, Raum anlegen/bearbeiten, Bestätigungsfragen (insbesondere Serienbearbeitung: „Nur dieser Termin" vs. „Gesamte Serie").
 - **Table** – Tagesansicht, Berichte, Nutzerverwaltung, Genehmigungsliste.
 - **Form** mit Input, Textarea, Select, Checkbox, Switch – alle Eingaben; Switch für Genehmigungspflicht je Raum und Einstellungen.
-- **Popover + Calendar** – Datumswahl im Buchungsformular und bei Filtern.
+- **Popover + Calendar** – Datumswahl im Buchungsformular und bei Filtern (bislang umgesetzt als natives `type="date"`-Feld, siehe Raumkalender; die Freie-Räume-Suche folgt derselben Praxis).
 - **Badge** – Buchungsstatus (Success/Warning/Destructive-Mapping oben), Ausstattungsmerkmale (neutral), Rollen.
 - **Alert** – blockierende Fehler inline (z. B. Doppelbuchungskonflikt), Hinweise.
 - **Toast (Sonner)** – transiente Erfolge („Buchung gespeichert"), nie für Fehler, die der Nutzer adressieren muss.
@@ -202,6 +202,38 @@ Adressaten dieses Kapitels sind die Umsetzungs-Tickets zu Anforderung 1 (Check-i
 - **Filter ohne Treffer** (`NoMatchesEmpty`, Icon `SearchX`): Es existieren Räume, aber keiner erfüllt die gewählte Merkmalskombination – die Aktion ist daher ausschließlich „Filter zurücksetzen" (`variant="outline"`), nicht das Anlegen eines Raums.
 
 Beide Varianten kombinieren Card und Button aus dem shadcn-Bestand, ohne eigene UI-Primitive. Wo Leere fachlich korrekt ist (Tagesansicht ohne Termine: freie Fenster sind Ergebnis, kein Fehler), gilt das Hinweisband-Muster aus „Zustände", kein Empty State über dem Gitter. Buchungsformular, Raumkalender und Tagesansicht übernehmen diese Trennung unverändert statt eigene Varianten zu erfinden.
+
+## Freie-Räume-Suche
+
+Die Umsetzungs-Ansicht zu Anforderung 1 („Freie Räume für einen Wunschzeitraum ermitteln"), kombiniert mit dem Merkmalsfilter nach Anforderung 2: Mitarbeitende geben Datum, Start- und Endzeit sowie gewünschte Ausstattung an und sehen nur die Räume, die in genau diesem Zeitraum buchbar sind – und legen daraus direkt ihre Buchung an. Datenquelle ist die fertige Verfügbarkeits-API `GET /api/rooms/available?from=&to=` (halboffenes Intervall, Back-to-back kollidiert nicht, ausstehende Buchungen blockieren ebenfalls); sie antwortet in derselben Raumform wie `GET /api/rooms`. Dieses Kapitel legt die Ansicht verbindlich fest, sodass das Sprint-Ticket ohne Neuentscheidungen bauen kann.
+
+**Einstieg und Route:** Eigene Route `/free`, registriert in `App.tsx` neben den bestehenden Seitenrouten; Sidebar-Menüpunkt „Freie Räume" in der Gruppe **Buchen** zwischen „Räume" und „Tagesansicht", NavLink wie die übrigen Punkte ohne `end`-Flag (aktive Markierung inkl. etwaiger Unterseiten, Konzept „Navigation"). Seitenkopf nach dem einheitlichen Muster: Titel „Freie Räume", Untertitel „Räume ohne Buchung im gewählten Zeitraum" – keine Primäraktion im Seitenkopf, denn die Aktion dieser Ansicht steht pro Treffer („Buchen").
+
+**Filterbereich:** Eine Card oberhalb der Ergebnisliste (Aufbau wie `AmenityFilter.tsx`: CardHeader mit Titel und Reset-Button, CardContent mit den Eingaben):
+
+- **Zeitraum:** Datum (natives `<input type="date">`), Startzeit und Endzeit (natives `<input type="time" step={900}>` – 15-Minuten-Raster passend zum TimeGrid), gemeinsam im Dreispalter `grid grid-cols-1 sm:grid-cols-3 gap-3` laut Formular-Raster; einheitlicher Eingaben-Stil wie in Raumkalender und BookingForm, Zeiten mit `tabular-nums`. Popover+Calendar bleibt Zielbild der Komponenten-Liste, bis es gebaut ist – bis dahin native Felder wie im restlichen Projekt, keine Doppelumsetzung.
+- **Defaults:** heutiges Tag (UTC-„YYYY-MM-DD" nach dem `heuteIso()`-Muster aus `RoomCalendar.tsx`), Start 08:00, Ende 18:00 – der ganze Arbeitstag als neutrale Ausgangsanzeige, aus der heraus verengt wird; die verbindliche Buchungszeit entsteht ohnehin erst im Bestätigungsschritt (siehe „Buchungseinstieg").
+- **Validierung:** Fehlendes Datum oder fehlende Zeiten blockiert die Suche mit Feldfehlern klein und rot unter dem jeweiligen Feld; `Ende <= Start` erhält den Wortlaut aus dem BookingForm („Die Endzeit muss nach der Startzeit liegen."). Ein serverseitig abgelehnter Zeitraum (400 mit Backend-Meldung, etwa aus einer manipulierten URL) erscheint im Fehlerzustand der Ergebnisliste mit dem Backend-Wortlaut – nicht als Feldfehler.
+- **Merkmale:** Dieselbe Checkbox-Gruppe mit AND-Logik wie der Raumlisten-Filter, Optionen aus dem festen Katalog (Beschluss 21.8.) via `GET /api/amenities`; Lade- und Fehlerzustand des Katalogs bleiben inline innerhalb der Filter-Card (vier Checkbox-Paar-Skelette bzw. dezente Meldung mit `outline`-„Erneut versuchen"), die Zeitsuche bleibt dabei nutzbar. „Filter zurücksetzen" stellt die Defaults wieder her und leert die Merkmalsauswahl.
+- **Reload-Verhalten:** EIN Effekt lädt neu, und alle Trigger liegen im selben Abhängigkeitssatz – Mount, jeder committete Filterwechsel, ein `reloadTick` für „Erneut versuchen". Jeder Lauf bricht den vorherigen Request über einen gemeinsamen `AbortController` ab, sodass kein überholter Treffer eine neuere Suche überschreibt (Falle aus der Tagesansicht: nie zwei Effekte mit überlappenden Dep-Sätzen). Kontrollierte Felder feuern erst bei übernommenem Wert, ein Debounce ist deshalb nicht nötig.
+- **URL-Sync:** Filterzustand wird als Query-Parameter gespiegelt (`?date=…&from=…&to=…&amenities=…`, Merkmale kommasepariert) – ein Suchergebnis ist damit verlinkbar; fehlende oder unlesbare Parameter führen sauber zu den Defaults. Umsetzung über `useSearchParams`.
+
+**Ergebnisliste:** Nur freie Räume (Anforderung 1) – die Liste kennt keinen „belegt"-Zustand, weshalb es dafür auch kein Badge gibt:
+
+- Abruf über eine neue Funktion `listAvailableRooms(fromIso, toIso)` in `frontend/src/api/rooms.ts` (gleiche `Room`-Form wie `listRooms`, ISO-Zeiten mit `Z`-Suffix wie im BookingForm – eindeutig UTC). Die Merkmalsfilterung läuft CLIENTSEITIG gegen die Trefferliste mit derselben AND-Logik wie in der Raumliste: Die API hält ihren Vertrag ohne Merkmalsparameter (Ticket-Grenze), die Räumenzahl macht den Unterschied nicht spürbar, und ein späterer `amenities`-Parameter wäre eine reine Erweiterung, wenn die Menge es erfordert.
+- Raster und Karte wie die Raumliste (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4`, Card mit Name, MapPin-Standort, Users-Kapazität, Merkmals-Badges) – Bausteine aus `RoomList.tsx` wiederverwenden, nicht kopieren.
+- **Verfügbarkeitsstatus:** Ein Badge der Variante `success` mit Label „Frei" (Fachliches Status-Mapping: frei ist der positive Fall) sowie eine Zeile mit dem gesuchten Zeitraum, z. B. „14:00–15:30 Uhr" – Zeiten ausschließlich über `formatTime` aus `lib/format`, mit `tabular-nums`.
+- **Buchungseinstieg:** Primäraktion je Treffer: Button „Buchen" (`default`, `CalendarPlus`-Icon, auf schmalen Breiten mindestens `h-11`) öffnet den bestehenden `BookingForm`-Dialog direkt über der Suchseite – mit vorbelegtem Raum und exakt dem gesuchten Zeitraum; der Nutzer ergänzt seinen Urheber und bestätigt. Nach erfolgreichem Speichern schließt der Dialog und die Suche läuft automatisch neu, sodass der gebuchte Raum sofort aus den Treffern fällt. Sekundär führt ein Link „Kalender" auf `/rooms/:id` (Raumkontext prüfen, bevor man bucht).
+  - Bekannte Lücke als Arbeitsanweisung für das Sprint-Ticket: `BookingForm` nimmt heute `raumId` und `kalenderDatum` entgegen, aber noch keine Zeiten. Ergänzt werden optionale Props `startZeit`/`endZeit` („HH:mm"), die beim Öffnen in die Zeitfelder schreiben – reine Erweiterung der bestehenden Schnittstelle, keine Verhaltensänderung für den Raumkalender. Bis dahin gilt der Zwischenstand: Dialog mit korrektem Raum und Datum, Zeiten trägt der Nutzer ein.
+- Keine Sortier- oder Gruppenlogik über die API-Reihenfolge hinaus (Raumname aufsteigend, wie `GET /api/rooms/available` liefert).
+
+**Zustände:** Alle drei gemäß etabliertem Muster, Referenz-Umsetzung bleibt `RoomList.tsx`:
+
+- **Lädt:** Skeleton-Raster aus sechs Karten-Skeletons in der Form der Ergebnisliste (Bausteine wie `RoomsSkeleton`), `aria-busy="true"`; jedes erneute Suchen zeigt das Skeleton erneut statt alten Inhalt einzufrieren.
+- **Leer „keine Räume frei":** zentrierte EmptyState-Card nach dem Muster aus „Leerzustand" (Icon `CalendarSearch`, `h-8 w-8 text-muted-foreground`): Kernaussage „Keine Räume im gewünschten Zeitraum frei.", Erläuterung „Probiere ein anderes Datum, kürzere Zeiten oder weniger Merkmalsfilter." – Aktion ausschließlich „Filter zurücksetzen" (`variant="outline"`): Defaults wiederherstellen, Merkmale leeren. Bewusst KEINE Unterscheidung „noch keine Räume angelegt" vs. „keiner passt zum Filter": Beides mündet hier in denselben Zustand mit derselben einzigen sinnvollen Aktion; der Anlegen-Einstieg lebt in der Raumliste, nicht in der Suche. Auch ein System ohne jegliche Räume zeigt diese Card, nicht eine Sondermeldung.
+- **Fehler:** destructives Alert wie `RoomsError` – Titel „Suche fehlgeschlagen", Beschreibung mit Backend-Meldung, soweit vorhanden (ApiError), sonst dem üblichen Hinweis; Button „Erneut versuchen" (`destructive size="sm"`) stößt denselben Abruf erneut an und setzt die Liste zuvor in den Ladezustand. Der Merkmals-Katalog als sekundäre Quelle meldet weiterhin nur inline in der Filter-Card (siehe oben).
+
+**Responsive-Verhalten:** Ergebnisliste stapelt mobile-first (`grid-cols-1` → `sm:grid-cols-2` → `lg:grid-cols-3` → `xl:grid-cols-4`). Der Filterbereich folgt der Regel „Desktop inline, mobil Sheet": ab `md` steht er inline über der Liste, darunter hinter einem „Filter"-Button in einem `Sheet` (Bestandskomponente der Kernkomponenten-Liste), der die Anzahl aktiver Filter am Button zeigt und sich bei Navigation schließt. Touch-Ziele („Buchen", Filter-Reset) auf kleinen Breiten mindestens `h-11`.
 
 ## Responsive-Verhalten
 
