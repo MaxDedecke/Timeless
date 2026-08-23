@@ -377,6 +377,12 @@ function respondToCreate(
         ],
       };
     }
+    if (/FROM room_amenities ra JOIN amenities a/i.test(sql)) {
+      // Merkmals-Nachladen der Antwort (withAmenities auf dem Transaktions-
+      // Client) – im Fake ohne Zuordnungen, wie im updateRoom-Responder
+      // desselben Tests.
+      return { rows: [] };
+    }
     throw new Error(`Unerwartete Abfrage in respondToCreate: ${record.sql}`);
   });
 }
