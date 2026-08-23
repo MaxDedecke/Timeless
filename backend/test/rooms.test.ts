@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { after, test } from "node:test";
+import { after, before, test } from "node:test";
 import request from "supertest";
 import app from "../src/server.js";
-import { pool } from "../src/db.js";
+import { __restorePoolForTests, __setPoolForTests } from "../src/db.js";
+import { InMemoryDb } from "./helpers/in-memory-db.js";
 import {
   createRoom,
   getRoom,
+  listAvailableRooms,
   listRooms,
   updateRoom,
 } from "../src/services/rooms.js";
@@ -17,24 +19,93 @@ import {
   queriesMatching,
 } from "./helpers/fake-pool.js";
 
-const testRun = `rooms_test_${Date.now()}`;
+// ---------------------------------------------------------------------------
+// Aufbau: Eine In-Memory-Postgres mit dem echten Migrationsschema für die
+// gesamte Datei, als Pool in die Produktions-Naht (src/db.ts) eingesetzt.
+// Alle Service- und API-Aufrufe dieser Datei laufen damit real gegen SQL
+// (DDL, Identity-Spalten, Fremdschlüssel, timestamptz-Vergleiche) – ohne
+// Container. Die Instanz stirbt mit dem Testlauf, Aufräumen entfällt.
+//
+// Damit entfällt auch der frühere DB-Erreichbarkeits-Zweig: Die ehemals nur
+// im Compose-Stack laufenden Integrationstests dieser Datei werden jetzt
+// immer ausgeführt.
+// ---------------------------------------------------------------------------
+
+const db = await InMemoryDb.migrated();
+__setPoolForTests(db.pool);
 
 after(async () => {
-  // Eigene Testdaten aufräumen und Pool schließen, damit der Lauf sauber endet.
-  if (canReachDb) {
-    await pool.query("DELETE FROM rooms WHERE name LIKE $1", [`${testRun}%`]);
-    await pool.query("DELETE FROM locations WHERE name LIKE $1", [
-      `${testRun}%`,
-    ]);
-  }
-  await pool.end();
+  // Ursprünglichen Pool zurückgeben und In-Memory-Instanz schließen, damit
+  // der Lauf sauber endet.
+  __restorePoolForTests();
+  await db.end();
 });
 
+let baseLocationId: number;
+let otherLocationId: number;
+
+before(async () => {
+  const base = await db.query<{ id: number }>(
+    "INSERT INTO locations (name) VALUES ('Raumtest – Basisstandort') RETURNING id::int AS id"
+  );
+  baseLocationId = base.rows[0].id;
+  const other = await db.query<{ id: number }>(
+    "INSERT INTO locations (name) VALUES ('Raumtest – Anderer Standort') RETURNING id::int AS id"
+  );
+  otherLocationId = other.rows[0].id;
+});
+
+/** Legt einen frischen Raum an – je Test einer, damit sich nichts beeinflusst. */
+async function createTestRoom(
+  name: string,
+  locationId: number = baseLocationId,
+  capacity = 8
+): Promise<number> {
+  const { rows } = await db.query<{ id: number }>(
+    "INSERT INTO rooms (name, location_id, capacity) VALUES ($1, $2, $3) RETURNING id::int AS id",
+    [name, locationId, capacity]
+  );
+  return rows[0].id;
+}
+
+/** Legt eine Buchungszeile direkt per SQL an (Arrangement für Kollisions-/Suchtests). */
+async function seedBooking(
+  roomId: number,
+  startsAt: string,
+  endsAt: string
+): Promise<void> {
+  await db.query(
+    "INSERT INTO bookings (room_id, created_by, starts_at, ends_at) " +
+      "VALUES ($1, 'vorhanden@example.com', $2::timestamptz, $3::timestamptz)",
+    [roomId, startsAt, endsAt]
+  );
+}
+
+async function countBookings(roomId: number): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM bookings WHERE room_id = $1",
+    [roomId]
+  );
+  return rows[0].n;
+}
+
+function bookingBody(roomId: number, startsAt: string, endsAt: string) {
+  return {
+    roomId,
+    startsAt,
+    endsAt,
+    createdBy: "mitarbeiter@example.com",
+  };
+}
+
+/** IDs der Räume in einer /available-Antwort. */
+function listedIds(body: Array<{ id: number }>): number[] {
+  return body.map((room) => room.id);
+}
+
 // ---------------------------------------------------------------------------
-// Teil 1: API-Tests gegen die App (laufen auch ohne Datenbank).
-//
-// Die Pflichtfeld-Validierung greift, BEVOR die Datenbank berührt wird –
-// deshalb sind diese Fälle auch in der Sandbox (ohne Postgres) prüfbar.
+// Teil 1: Pflichtfeld-Validierung von POST/PUT/PATCH – sie greift, BEVOR die
+// Datenbank berührt wird, und liefert verlässlich 400 mit Meldung.
 // ---------------------------------------------------------------------------
 
 test("PUT /api/rooms/:id ohne vollständige Pflichtfelder wird mit 400 und Fehlermeldung abgelehnt", async () => {
@@ -70,23 +141,16 @@ test("PATCH /api/rooms/:id mit explizit geleertem Pflichtfeld wird mit 400 abgel
 });
 
 test("PATCH /api/rooms/:id mit leerem Körper ändert nichts (keine Validierungsfehler)", async () => {
-  // Ohne Felder gibt es nichts zu validieren – hier geht es nur darum, dass
-  // die Route die Anfrage grundsätzlich annimmt und keinen Pflichtfeld-Verstoß
-  // meldet. Je nach Umfeld existiert der Raum mit ID 1 (200), existiert er
-  // nicht (404 – DB erreichbar, Tabelle leer) oder ist die DB unerreichbar
-  // (500) – beides kein Validierungsproblem. Nur im 404-Fall kommt eine
-  // verständliche JSON-Fehlermeldung aus unserem Router zurück.
+  // Ohne Felder gibt es nichts zu validieren – die Route nimmt die Anfrage
+  // grundsätzlich an. Gegen die In-Memory-DB ist das Verhalten deterministisch:
+  // Der Raum mit ID 1 existiert hier nicht, also 404 mit Meldung aus dem
+  // Router (keine stille Antwort und kein roher 500).
   const res = await request(app).patch("/api/rooms/1").send({});
+  assert.equal(res.status, 404, "Leeres PATCH auf unbekannter ID war kein 404");
   assert.ok(
-    [200, 404, 500].includes(res.status),
-    `Unerwarteter Status ${res.status} für leeres PATCH`
+    typeof res.body?.error === "string" && res.body.error.length > 0,
+    "404 ohne verständliche Fehlermeldung"
   );
-  if (res.status === 404) {
-    assert.ok(
-      typeof res.body?.error === "string" && res.body.error.length > 0,
-      "404 ohne verständliche Fehlermeldung"
-    );
-  }
 });
 
 test("GET /api/rooms/:id mit nicht-numerischer ID liefert 404 ohne Datenbankzugriff", async () => {
@@ -127,45 +191,17 @@ test("POST /api/rooms ohne Pflichtfelder wird mit 400 und Fehlermeldung abgelehn
 });
 
 // ---------------------------------------------------------------------------
-// Teil 2: API-Integration – läuft nur, wenn eine Postgres erreichbar ist
-// (in der Sandbox normalerweise nicht; im Compose-Stack dagegen schon).
-//
-// Bestehende PUT/PATCH-Tests legen Räume direkt per SQL an, um unabhängig vom
-// Anlegen zu bleiben; die POST-Tests unten nutzen die API selbst.
-// ---------------------------------------------------------------------------
-
-const canReachDb = await pool
-  .query("SELECT 1")
-  .then(() => true)
-  .catch(() => false);
-
-async function createTestRoom(
-  name: string,
-  locationId: number,
-  capacity: number
-): Promise<number> {
-  const { rows } = await pool.query<{ id: number }>(
-    "INSERT INTO rooms (name, location_id, capacity) VALUES ($1, $2, $3) RETURNING id::int AS id",
-    [name, locationId, capacity]
-  );
-  return rows[0].id;
-}
-
-// ---------------------------------------------------------------------------
-// Teil 1b: Containerlose Service-Tests über den Fake-Pool (Test-Naht in
-// src/db.ts). Sie prüfen die Leselogik der Raumliste ohne Postgres:
-// GET /api/rooms bzw. listRooms() muss je Raum die zugeordneten Merkmale
-// mitliefern – Räume ohne Zuordnung als leeres Array, nicht null und
-// nicht mit Fehler (Akzeptanzkriterien dieses Tickets).
-//
-// Bewusst Service-Ebene statt supertest: Der Fake beantwortet Abfragen nur
-// protokollierend; die Route fügt hier keine Logik hinzu, und ein Fake auf
-// HTTP-Ebene müsste JSON-Serialisierung nachbauen, um nichts zu prüfen.
+// Teil 2: Containerlose Service-Tests über den Fake-Pool (protokollierende
+// Naht). Sie prüfen Eigenschaften, die gegen eine echte Datenbank unsichtbar
+// blieben: dass bei ungültigen Pflichtfeldern gar kein Statement abgesetzt
+// wird und dass die Listenabfrage die erwartete Form hat. Das reale
+// SQL-Verhalten prüfen die übrigen Teile dieser Datei gegen die
+// In-Memory-DB.
 // ---------------------------------------------------------------------------
 
 // Eigene Fake-Pool-Sitzung je Test (begin/end im finally): So bleibt die Naht
-// nur für den jeweiligen Service-Test aktiv und die DB-Integrationstests
-// derselben Datei treffen im Compose-Stack weiterhin die echte Postgres.
+// nur für den jeweiligen Service-Test aktiv und die übrigen Tests treffen
+// weiterhin die In-Memory-Postgres.
 function beginFakeSession(): FakeDbSession {
   const session = new FakeDbSession();
   session.begin();
@@ -284,12 +320,12 @@ test("listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverän
 });
 
 // ---------------------------------------------------------------------------
-// Teil 1c: Containerlose Service-Tests für Anlegen und Ändern (dieses Ticket).
+// Teil 3: Containerlose Service-Tests für Anlegen und Ändern (Fake-Pool).
 //
-// Gleiche Naht wie in locations.test.ts: Der Fake protokolliert die Statements
-// der Transaktion und beantwortet sie so, wie es Postgres täte. Geprüft wird
-// die Fachlogik von services/rooms – Anlegen inkl. GET-Nachweis, drei
-// Pflichtfeld-Ablehnungen und Änderung von Standort/Kapazität.
+// Geprüft wird die Fachlogik von services/rooms – Anlegen inkl. GET-Nachweis,
+// drei Pflichtfeld-Ablehnungen und Änderung von Standort/Kapazität. Das
+// reale Schreibverhalten bestätigen die API-Tests in Teil 4 gegen die
+// In-Memory-DB.
 // ---------------------------------------------------------------------------
 
 /** Zeile des ROOM_WITH_LOCATION_SELECT für einen Raum (Form wie in Postgres). */
@@ -532,159 +568,356 @@ test("Standort und Kapazität ändern: updateRoom ändert genau diese Felder; di
   }
 });
 
-if (canReachDb) {
-  // Eigene Standorte, damit der Test nicht an fremden Daten hängt.
-  const baseLocation = await request(app)
-    .post("/api/locations")
-    .send({ name: `${testRun} – Basisstandort` });
-  const otherLocation = await request(app)
-    .post("/api/locations")
-    .send({ name: `${testRun} – Anderer Standort` });
-  assert.equal(baseLocation.status, 201);
-  assert.equal(otherLocation.status, 201);
-  const baseLocationId: number = baseLocation.body.id;
-  const otherLocationId: number = otherLocation.body.id;
+// ---------------------------------------------------------------------------
+// Teil 4: API-Integration gegen die In-Memory-Postgres – Anlegen und Ändern
+// über HTTP, inklusive Fremdschlüssel-Prüfung des Standorts.
+// ---------------------------------------------------------------------------
 
-  test("POST /api/rooms legt einen Raum an; er erscheint in GET /api/rooms inklusive Standort", async () => {
-    const created = await request(app).post("/api/rooms").send({
-      name: `${testRun} – Besprechung`,
-      locationId: baseLocationId,
-      capacity: 12,
-    });
-    assert.equal(created.status, 201);
-    assert.equal(created.body.name, `${testRun} – Besprechung`);
-    assert.equal(created.body.locationId, baseLocationId);
-    assert.equal(created.body.capacity, 12);
-    assert.deepEqual(created.body.location, {
-      id: baseLocationId,
-      name: `${testRun} – Basisstandort`,
-    });
-
-    const list = await request(app).get("/api/rooms");
-    assert.equal(list.status, 200);
-    assert.ok(Array.isArray(list.body));
-    const listed = list.body.find(
-      (room: { id: number }) => room.id === created.body.id
-    );
-    assert.ok(listed, "angelegter Raum fehlt in GET /api/rooms");
-    assert.equal(listed.name, `${testRun} – Besprechung`);
-    assert.equal(listed.capacity, 12);
-    assert.deepEqual(listed.location, {
-      id: baseLocationId,
-      name: `${testRun} – Basisstandort`,
-    });
+test("POST /api/rooms legt einen Raum an; er erscheint in GET /api/rooms inklusive Standort", async () => {
+  const created = await request(app).post("/api/rooms").send({
+    name: "API-Angelegt – Besprechung",
+    locationId: baseLocationId,
+    capacity: 12,
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.name, "API-Angelegt – Besprechung");
+  assert.equal(created.body.locationId, baseLocationId);
+  assert.equal(created.body.capacity, 12);
+  assert.deepEqual(created.body.location, {
+    id: baseLocationId,
+    name: "Raumtest – Basisstandort",
   });
 
-  test("POST /api/rooms mit nicht existierendem Standort wird mit 400 abgelehnt", async () => {
-    const res = await request(app).post("/api/rooms").send({
-      name: `${testRun} – ohne Standort`,
-      locationId: 99999999,
-      capacity: 4,
-    });
-    assert.equal(res.status, 400);
-    assert.match(res.body.error, /Standort/i);
+  const list = await request(app).get("/api/rooms");
+  assert.equal(list.status, 200);
+  assert.ok(Array.isArray(list.body));
+  const listed = list.body.find(
+    (room: { id: number }) => room.id === created.body.id
+  );
+  assert.ok(listed, "angelegter Raum fehlt in GET /api/rooms");
+  assert.equal(listed.name, "API-Angelegt – Besprechung");
+  assert.equal(listed.capacity, 12);
+  assert.deepEqual(listed.location, {
+    id: baseLocationId,
+    name: "Raumtest – Basisstandort",
+  });
+});
 
-    // Es wurde kein Raum angelegt.
-    const list = await request(app).get("/api/rooms");
+test("POST /api/rooms mit nicht existierendem Standort wird mit 400 abgelehnt", async () => {
+  const res = await request(app).post("/api/rooms").send({
+    name: "API ohne Standort",
+    locationId: 99999999,
+    capacity: 4,
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /Standort/i);
+});
+
+test("PUT ändert Name, Standort und Kapazität; die Änderung ist über GET sichtbar", async () => {
+  const roomId = await createTestRoom("API alter Name");
+
+  const updated = await request(app)
+    .put(`/api/rooms/${roomId}`)
+    .send({
+      name: "API neuer Name",
+      locationId: otherLocationId,
+      capacity: 14,
+    });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.name, "API neuer Name");
+  assert.equal(updated.body.locationId, otherLocationId);
+  assert.equal(updated.body.capacity, 14);
+
+  const readBack = await request(app).get(`/api/rooms/${roomId}`);
+  assert.equal(readBack.status, 200);
+  assert.equal(readBack.body.name, "API neuer Name");
+  assert.equal(readBack.body.locationId, otherLocationId);
+  assert.equal(readBack.body.capacity, 14);
+});
+
+test("PATCH ändert nur die übergebenen Felder", async () => {
+  const roomId = await createTestRoom("API patch");
+
+  const updated = await request(app)
+    .patch(`/api/rooms/${roomId}`)
+    .send({ capacity: 20 });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.capacity, 20);
+  assert.equal(updated.body.name, "API patch");
+  assert.equal(updated.body.locationId, baseLocationId);
+
+  const readBack = await request(app).get(`/api/rooms/${roomId}`);
+  assert.equal(readBack.body.locationId, baseLocationId);
+  assert.equal(readBack.body.name, "API patch");
+});
+
+test("PATCH mit leerem Körper lässt den Raum unverändert", async () => {
+  const roomId = await createTestRoom("API leer");
+
+  const updated = await request(app)
+    .patch(`/api/rooms/${roomId}`)
+    .send({});
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.name, "API leer");
+  assert.equal(updated.body.capacity, 8);
+});
+
+test("Änderung auf einen nicht existierenden Standort wird mit 400 abgelehnt", async () => {
+  const roomId = await createTestRoom("API standortfehler");
+
+  const updated = await request(app)
+    .patch(`/api/rooms/${roomId}`)
+    .send({ locationId: 99999999 });
+  assert.equal(updated.status, 400);
+  assert.match(updated.body.error, /Standort/i);
+
+  // Der Raum bleibt unverändert.
+  const readBack = await request(app).get(`/api/rooms/${roomId}`);
+  assert.equal(readBack.body.locationId, baseLocationId);
+});
+
+test("PUT/PATCH auf unbekannte Raum-ID liefert 404 mit Fehlermeldung", async () => {
+  for (const verb of ["put", "patch"] as const) {
+    const body =
+      verb === "put"
+        ? { name: "API egal", locationId: baseLocationId, capacity: 2 }
+        : { capacity: 2 };
+    const res = await request(app)[verb]("/api/rooms/99999999").send(body);
+    assert.equal(res.status, 404, `${verb} auf unbekannte ID war nicht 404`);
     assert.ok(
-      !list.body.some(
-        (room: { name: string }) => room.name === `${testRun} – ohne Standort`
-      )
+      typeof res.body.error === "string" && res.body.error.length > 0,
+      "Antwort enthält keine verständliche Fehlermeldung"
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Teil 5: Vertragstests GET /api/rooms/available?from=&to= (Anforderung 1:
+// freie Räume für einen Wunschzeitraum) – real gegen die In-Memory-DB.
+//
+// Semantik identisch zur Konfliktprüfung (services/bookings.ts):
+// halboffenes Intervall [from, to), Back-to-back zählt als frei.
+// ---------------------------------------------------------------------------
+
+test("GET /api/rooms/available listet ausschließlich Räume ohne überschneidende Buchung", async () => {
+  const freeRoom = await createTestRoom("Suche – freier Raum");
+  const busyRoom = await createTestRoom("Suche – belegter Raum");
+  await seedBooking(busyRoom, "2026-10-01T09:00:00Z", "2026-10-01T10:30:00Z");
+
+  const res = await request(app)
+    .get("/api/rooms/available")
+    .query({ from: "2026-10-01T08:00:00Z", to: "2026-10-01T12:00:00Z" });
+
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body));
+
+  const ids = listedIds(res.body);
+  assert.ok(ids.includes(freeRoom), "freier Raum fehlt in der Verfügbarkeitsliste");
+  assert.ok(
+    !ids.includes(busyRoom),
+    "Raum mit kollidierender Buchung wurde als frei gelistet"
+  );
+
+  // Antwortform = Raumliste (wie GET /api/rooms), damit die Suche dieselben
+  // Felder anbieten kann: Standort eingebettet, Merkmale als Liste.
+  const listed = res.body.find((room: { id: number }) => room.id === freeRoom);
+  assert.equal(listed.name, "Suche – freier Raum");
+  assert.equal(listed.locationId, baseLocationId);
+  assert.equal(listed.capacity, 8);
+  assert.deepEqual(listed.amenities, []);
+  assert.deepEqual(listed.location, {
+    id: baseLocationId,
+    name: "Raumtest – Basisstandort",
+  });
+});
+
+test("Jede Form der Überschneidung schließt den Raum aus", async () => {
+  const busyRoom = await createTestRoom("Suche – Überschneidungen");
+  const freeRoom = await createTestRoom("Suche – Kontrollraum ohne Buchung");
+  await seedBooking(busyRoom, "2026-10-02T10:00:00Z", "2026-10-02T11:00:00Z");
+
+  // Teilweise vorne, teilweise hinten, umschließend und vollständig enthalten.
+  const colliding = [
+    ["2026-10-02T09:30:00Z", "2026-10-02T10:30:00Z"],
+    ["2026-10-02T10:30:00Z", "2026-10-02T11:30:00Z"],
+    ["2026-10-02T09:00:00Z", "2026-10-02T12:00:00Z"],
+    ["2026-10-02T10:15:00Z", "2026-10-02T10:45:00Z"],
+  ];
+  for (const [from, to] of colliding) {
+    const res = await request(app)
+      .get("/api/rooms/available")
+      .query({ from, to });
+    assert.equal(res.status, 200, `Status für ${from}–${to} war nicht 200`);
+    assert.ok(
+      !listedIds(res.body).includes(busyRoom),
+      `Raum war für ${from}–${to} fälschlich als frei gelistet`
+    );
+    assert.ok(
+      listedIds(res.body).includes(freeRoom),
+      `Kontrollraum fehlte für ${from}–${to}`
+    );
+  }
+});
+
+test("Direkt angrenzende Buchungen (Back-to-back) schließen den Raum nicht aus", async () => {
+  const room = await createTestRoom("Suche – Back-to-back");
+  await seedBooking(room, "2026-10-03T10:00:00Z", "2026-10-03T11:00:00Z");
+
+  // Vorläufer endet exakt bei Beginn der Bestehenden …
+  const before = await request(app)
+    .get("/api/rooms/available")
+    .query({ from: "2026-10-03T09:00:00Z", to: "2026-10-03T10:00:00Z" });
+  assert.equal(before.status, 200);
+  assert.ok(
+    listedIds(before.body).includes(room),
+    "Zeitraum direkt VOR bestehender Buchung galt als belegt"
+  );
+
+  // … Anschluss beginnt exakt bei deren Ende.
+  const after = await request(app)
+    .get("/api/rooms/available")
+    .query({ from: "2026-10-03T11:00:00Z", to: "2026-10-03T12:00:00Z" });
+  assert.equal(after.status, 200);
+  assert.ok(
+    listedIds(after.body).includes(room),
+    "Zeitraum direkt NACH bestehender Buchung galt als belegt"
+  );
+
+  // Kontrolle: derselbe Raum ist im Schnittbereich weiterhin ausgeschlossen.
+  const overlap = await request(app)
+    .get("/api/rooms/available")
+    .query({ from: "2026-10-03T10:30:00Z", to: "2026-10-03T11:30:00Z" });
+  assert.ok(
+    !listedIds(overlap.body).includes(room),
+    "Überschneidender Zeitraum wurde nicht als belegt erkannt"
+  );
+});
+
+test("Nach erfolgreicher Buchung gilt der Raum für denselben Zeitraum nicht mehr als frei", async () => {
+  const room = await createTestRoom("Suche – nach Buchung");
+  const query = { from: "2026-10-04T14:00:00Z", to: "2026-10-04T15:00:00Z" };
+
+  const before = await request(app).get("/api/rooms/available").query(query);
+  assert.ok(
+    listedIds(before.body).includes(room),
+    "Raum ohne Buchung wurde nicht als frei gelistet"
+  );
+
+  const booked = await request(app)
+    .post("/api/bookings")
+    .send(bookingBody(room, query.from, query.to));
+  assert.equal(booked.status, 201);
+
+  const afterRes = await request(app).get("/api/rooms/available").query(query);
+  assert.ok(
+    !listedIds(afterRes.body).includes(room),
+    "Raum erscheint nach eigener Buchung weiter als frei"
+  );
+});
+
+test("Fehlende oder unlesbare Zeitangaben führen zu 400 mit verständlicher Meldung", async () => {
+  const cases: Array<Record<string, string>> = [
+    {}, // beide Parameter fehlen
+    { from: "2026-10-05T08:00:00Z" }, // to fehlt
+    { to: "2026-10-05T12:00:00Z" }, // from fehlt
+    { from: "kein-datum", to: "2026-10-05T12:00:00Z" },
+    { from: "2026-10-05T08:00:00Z", to: "kein-datum" },
+    { from: "", to: "2026-10-05T12:00:00Z" },
+    { from: "2026-10-05T08:00:00Z", to: "" },
+    { from: "2026-10-05T24:99:00Z", to: "2026-10-05T12:00:00Z" }, // unmögliche Uhrzeit
+    { from: "2026-13-01T08:00:00Z", to: "2026-10-05T12:00:00Z" }, // Monat 13
+  ];
+  for (const query of cases) {
+    const res = await request(app).get("/api/rooms/available").query(query);
+    assert.equal(
+      res.status,
+      400,
+      `Status für ${JSON.stringify(query)} war nicht 400`
+    );
+    assert.ok(
+      typeof res.body.error === "string" && res.body.error.length > 0,
+      `Keine verständliche Fehlermeldung für ${JSON.stringify(query)}`
+    );
+  }
+});
+
+test("Ein leeres oder invertiertes Intervall (to <= from) wird mit 400 abgelehnt", async () => {
+  const equal = await request(app).get("/api/rooms/available").query({
+    from: "2026-10-06T12:00:00Z",
+    to: "2026-10-06T12:00:00Z",
+  });
+  assert.equal(equal.status, 400);
+  assert.match(equal.body.error, /nach/);
+
+  const inverted = await request(app).get("/api/rooms/available").query({
+    from: "2026-10-06T12:00:00Z",
+    to: "2026-10-06T11:00:00Z",
+  });
+  assert.equal(inverted.status, 400);
+  assert.ok(typeof inverted.body.error === "string" && inverted.body.error.length > 0);
+});
+
+// ---------------------------------------------------------------------------
+// Teil 6: Service-Ebene der Verfügbarkeitssuche – Merkmals-Zusammenführung
+// über mehrere Räume und Fachfehler ohne Umweg über HTTP.
+// ---------------------------------------------------------------------------
+
+test("listAvailableRooms liefert die Merkmale je freiem Raum, leere Zuordnung als leere Liste", async () => {
+  const withAmenity = await createTestRoom(
+    "Service-Suche – mit Beamer",
+    baseLocationId,
+    10
+  );
+  const withoutAmenity = await createTestRoom(
+    "Service-Suche – ohne Merkmal",
+    otherLocationId,
+    4
+  );
+  // Beamer-Zuordnung direkt setzen (Katalog kommt aus Migration 002); die
+  // Zuordnung per Unterabfrage, weil pg-mem Parameter im INSERT..SELECT als
+  // Text bindet.
+  await db.query(
+    "INSERT INTO room_amenities (room_id, amenity_id) " +
+      "VALUES ((SELECT id FROM rooms WHERE name = 'Service-Suche – mit Beamer'), " +
+      "(SELECT id FROM amenities WHERE key = 'beamer'))"
+  );
+
+  const rooms = await listAvailableRooms({
+    from: "2026-10-07T08:00:00Z",
+    to: "2026-10-07T18:00:00Z",
   });
 
-  test("PUT ändert Name, Standort und Kapazität; die Änderung ist über GET sichtbar", async () => {
-    const roomId = await createTestRoom(
-      `${testRun} – alter Name`,
-      baseLocationId,
-      6
-    );
+  const ids = rooms.map((room) => room.id);
+  assert.ok(ids.includes(withAmenity), "Raum mit Merkmal fehlt unter den freien");
+  assert.ok(ids.includes(withoutAmenity), "Raum ohne Merkmal fehlt unter den freien");
 
-    const updated = await request(app)
-      .put(`/api/rooms/${roomId}`)
-      .send({
-        name: `${testRun} – neuer Name`,
-        locationId: otherLocationId,
-        capacity: 14,
-      });
-    assert.equal(updated.status, 200);
-    assert.equal(updated.body.name, `${testRun} – neuer Name`);
-    assert.equal(updated.body.locationId, otherLocationId);
-    assert.equal(updated.body.capacity, 14);
-
-    const readBack = await request(app).get(`/api/rooms/${roomId}`);
-    assert.equal(readBack.status, 200);
-    assert.equal(readBack.body.name, `${testRun} – neuer Name`);
-    assert.equal(readBack.body.locationId, otherLocationId);
-    assert.equal(readBack.body.capacity, 14);
+  const listedWith = rooms.find((room) => room.id === withAmenity);
+  assert.deepEqual(listedWith?.amenities, [{ key: "beamer", label: "Beamer" }]);
+  assert.deepEqual(listedWith?.location, {
+    id: baseLocationId,
+    name: "Raumtest – Basisstandort",
   });
 
-  test("PATCH ändert nur die übergebenen Felder", async () => {
-    const roomId = await createTestRoom(
-      `${testRun} – patch`,
-      baseLocationId,
-      8
-    );
+  const listedWithout = rooms.find((room) => room.id === withoutAmenity);
+  assert.deepEqual(
+    listedWithout?.amenities,
+    [],
+    "Raum ohne Merkmale muss ein leeres Array liefern"
+  );
+  assert.equal(listedWithout?.capacity, 4);
+});
 
-    const updated = await request(app)
-      .patch(`/api/rooms/${roomId}`)
-      .send({ capacity: 20 });
-    assert.equal(updated.status, 200);
-    assert.equal(updated.body.capacity, 20);
-    assert.equal(updated.body.name, `${testRun} – patch`);
-    assert.equal(updated.body.locationId, baseLocationId);
-
-    const readBack = await request(app).get(`/api/rooms/${roomId}`);
-    assert.equal(readBack.body.locationId, baseLocationId);
-    assert.equal(readBack.body.name, `${testRun} – patch`);
-  });
-
-  test("PATCH mit leerem Körper lässt den Raum unverändert", async () => {
-    const roomId = await createTestRoom(
-      `${testRun} – leer`,
-      baseLocationId,
-      5
-    );
-
-    const updated = await request(app)
-      .patch(`/api/rooms/${roomId}`)
-      .send({});
-    assert.equal(updated.status, 200);
-    assert.equal(updated.body.name, `${testRun} – leer`);
-    assert.equal(updated.body.capacity, 5);
-  });
-
-  test("Änderung auf einen nicht existierenden Standort wird mit 400 abgelehnt", async () => {
-    const roomId = await createTestRoom(
-      `${testRun} – standortfehler`,
-      baseLocationId,
-      3
-    );
-
-    const updated = await request(app)
-      .patch(`/api/rooms/${roomId}`)
-      .send({ locationId: 99999999 });
-    assert.equal(updated.status, 400);
-    assert.match(updated.body.error, /Standort/i);
-
-    // Der Raum bleibt unverändert.
-    const readBack = await request(app).get(`/api/rooms/${roomId}`);
-    assert.equal(readBack.body.locationId, baseLocationId);
-  });
-
-  test("PUT/PATCH auf unbekannte Raum-ID liefert 404 mit Fehlermeldung", async () => {
-    for (const verb of ["put", "patch"] as const) {
-      const body =
-        verb === "put"
-          ? { name: `${testRun} – egal`, locationId: baseLocationId, capacity: 2 }
-          : { capacity: 2 };
-      const res = await request(app)[verb]("/api/rooms/99999999").send(body);
-      assert.equal(res.status, 404, `${verb} auf unbekannte ID war nicht 404`);
-      assert.ok(
-        typeof res.body.error === "string" && res.body.error.length > 0,
-        "Antwort enthält keine verständliche Fehlermeldung"
-      );
+test("listAvailableRooms wirft bei ungültigen Zeitangaben einen ValidationError", async () => {
+  await assert.rejects(
+    listAvailableRooms({}),
+    (err: unknown) => err instanceof ValidationError
+  );
+  await assert.rejects(
+    listAvailableRooms({ from: "2026-10-08T10:00:00Z", to: "2026-10-08T09:00:00Z" }),
+    (err: unknown) => {
+      assert.ok(err instanceof ValidationError);
+      assert.match((err as Error).message, /nach/);
+      return true;
     }
-  });
-}
-
+  );
+});

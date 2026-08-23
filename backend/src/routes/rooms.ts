@@ -1,8 +1,10 @@
 import { NextFunction, Request, Response, Router } from "express";
 import { DomainNotFoundError as NotFoundError, ValidationError } from "../services/errors.js";
 import {
+  AvailabilityInput,
   createRoom,
   getRoom,
+  listAvailableRooms,
   listRooms,
   RoomChangeInput,
   updateRoom,
@@ -39,6 +41,26 @@ router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
     next(err);
   }
 });
+
+// GET /api/rooms/available?from=&to= – freie Räume für einen Zeitraum
+// (Anforderung 1). Bewusst VOR dem /:id-Platzhalter registriert, sonst
+// verschluckt "available" als :id und die Suche liefert 404.
+// Validierung und Überlappungslogik liegen im Service; ValidationError
+// (fehlend/unlesbar/to<=from) führt unten zu 400 mit Meldung.
+router.get(
+  "/available",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const input: AvailabilityInput = {
+        from: req.query.from,
+        to: req.query.to,
+      };
+      res.json(await listAvailableRooms(input));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // GET /api/rooms/:id – einen Raum lesen (Raumdetail inklusive Merkmale).
 router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {

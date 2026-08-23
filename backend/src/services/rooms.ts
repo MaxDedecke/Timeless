@@ -5,7 +5,8 @@ import { parseAmenityKeys, RoomAmenity, setRoomAmenities } from "./amenities.js"
 import type { Location } from "./locations.js";
 
 /**
- * Räume: anlegen, lesen (einzeln und Liste) und ändern.
+ * Räume: anlegen, lesen (einzeln und Liste), ändern und auf freie Zeiträume
+ * prüfen (Anforderung 1: freie Räume für einen Wunschzeitraum).
  *
  * Pflichtfeld-Regeln (Anforderung 1):
  * - Name nicht leer,
@@ -113,6 +114,141 @@ export async function listRooms(): Promise<RoomWithAmenities[]> {
     `${ROOM_WITH_LOCATION_SELECT} ORDER BY rooms.name`
   );
   return rows;
+}
+
+/**
+ * Zeitraum-Eingabe der Verfügbarkeitssuche, wie sie der Client sendet.
+ */
+export interface AvailabilityInput {
+  from?: unknown;
+  to?: unknown;
+}
+
+/**
+ * Validiert `from`/`to` der Verfügbarkeitssuche (GET /api/rooms/available).
+ *
+ * Dieselbe Wertung wie die Zeitfelder der Konfliktprüfung in
+ * services/bookings.ts (validateTimestamp): fehlend oder unlesbar ist ein
+ * ValidationError (HTTP 400). Zusätzlich wird ein leeres Intervall
+ * (`from >= to`) abgelehnt – ein solcher Zeitraum kann keinen Raum frei
+ * haben, und eine Antwort ohne Aussagekraft wäre irreführend.
+ *
+ * Dieselbe Fehlerklasse wie beim Buchen (die Raumsuche und die Konflikt-
+ * prüfung teilen sich dieselbe Zeit-Semantik), aber eigener Wortlaut, der
+ * die Parameter der Suche beim Namen nennt.
+ */
+function validateAvailabilityInterval(
+  raw: AvailabilityInput
+): { from: Date; to: Date } {
+  const from = parseAvailabilityBound(raw.from, "Startzeit (from)");
+  const to = parseAvailabilityBound(raw.to, "Endzeit (to)");
+  if (to.getTime() <= from.getTime()) {
+    throw new ValidationError(
+      "Die Endzeit (to) muss nach der Startzeit (from) liegen."
+    );
+  }
+  return { from, to };
+}
+
+/**
+ * Ein Zeitgrenzen-Wert der Suche: String oder Date, in ein gültiges Datum
+ * auflösbar – sonst ValidationError mit suchspezifischer Meldung.
+ */
+function parseAvailabilityBound(raw: unknown, label: string): Date {
+  if (typeof raw !== "string" && !(raw instanceof Date)) {
+    throw new ValidationError(`Die Raumsuche benötigt eine gültige ${label}.`);
+  }
+  const value = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(value.getTime())) {
+    throw new ValidationError(
+      `Die ${label} der Raumsuche ist kein gültiges Datum.`
+    );
+  }
+  return value;
+}
+
+/**
+ * Listet die Räume, die im halboffenen Intervall [from, to) keine
+ * überschneidende Buchung haben (Anforderung 1: freie Räume ermitteln).
+ *
+ * Überschneidung mit derselben Semantik wie findOverlappingBookings in
+ * services/bookings.ts: Eine bestehende Buchung kollidiert genau dann, wenn
+ * ihr Beginn vor dem Intervall-Ende UND ihr Ende nach dem Intervall-Beginn
+ * liegt. Back-to-back (Buchung endet exakt bei `from` oder beginnt exakt bei
+ * `to`) kollidiert dadurch nicht – der Raum bleibt gelistet.
+ *
+ * Umsetzung als Anti-Join (LEFT JOIN bookings … WHERE b.id IS NULL): Ein
+ * Raum ohne Kollision bleibt stehen, ein Raum mit mindestens einer
+ * kollidierenden Buchung fällt heraus – unabhängig vom Status der Buchung,
+ * denn ein ausstehender Zeitraum blockiert ebenfalls (Anforderung 4).
+ *
+ * Antwortform = Raumliste (ROOM_WITH_LOCATION_SELECT): dieselbe Darstellung
+ * wie GET /api/rooms, damit die Raumsuche dieselben Felder anbietet. Die
+ * Merkmale kommen hier als separate Abfrage je Raum (IN-Liste) statt als
+ * korrelierte Subquery – funktional identisch, aber von der In-Memory-DB der
+ * Vertragstests (pg-mem) ausführbar, die korrelierte Subqueries über Joins
+ * nicht trägt.
+ *
+ * Wirft ValidationError (HTTP 400) bei fehlenden/unlesbaren Zeitangaben und
+ * bei `to <= from`.
+ */
+export async function listAvailableRooms(
+  input: AvailabilityInput
+): Promise<RoomWithAmenities[]> {
+  const { from, to } = validateAvailabilityInterval(input);
+
+  const { rows } = await pool.query<RoomRow>(
+    `SELECT r.id::int AS id,
+            r.name AS name,
+            r.location_id::int AS "locationId",
+            r.capacity,
+            l.name AS "locationName"
+     FROM rooms r
+     JOIN locations l ON l.id = r.location_id
+     LEFT JOIN bookings b
+       ON b.room_id = r.id
+      AND b.starts_at < $2::timestamptz
+      AND b.ends_at > $1::timestamptz
+     WHERE b.id IS NULL
+     ORDER BY r.name`,
+    [from.toISOString(), to.toISOString()]
+  );
+
+  // Merkmale nachladen: eine Abfrage für alle freien Räume (IN-Liste statt
+  // N korrelierten Subqueries), gemappt auf dieselbe {key, label}-Form wie in
+  // der Raumliste; Räume ohne Merkmal erhalten [] statt null.
+  const amenityRows =
+    rows.length === 0
+      ? []
+      : (
+          await pool.query<{
+            roomId: number;
+            key: string;
+            label: string;
+          }>(
+            `SELECT ra.room_id::int AS "roomId", a.key, a.label
+             FROM room_amenities ra
+             JOIN amenities a ON a.id = ra.amenity_id
+             WHERE ra.room_id IN (${rows.map((_, i) => `${i + 1}`).join(", ")})
+             ORDER BY ra.room_id, a.key`,
+            rows.map((row) => row.id)
+          )
+        ).rows;
+  const amenitiesByRoom = new Map<number, RoomAmenity[]>();
+  for (const amenityRow of amenityRows) {
+    const list = amenitiesByRoom.get(amenityRow.roomId) ?? [];
+    list.push({ key: amenityRow.key, label: amenityRow.label });
+    amenitiesByRoom.set(amenityRow.roomId, list);
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    locationId: row.locationId,
+    capacity: row.capacity,
+    amenities: amenitiesByRoom.get(row.id) ?? [],
+    location: { id: row.locationId, name: row.locationName },
+  }));
 }
 
 /**
