@@ -29,12 +29,21 @@ export interface BookingInput {
 }
 
 /**
- * Buchungen eines Raums laden (GET /api/bookings?roomId=…). Grundlage des
- * Raumkalenders – ohne date-Parameter liefert die API alle Buchungen des
- * Raums, die Ansicht filtert clientseitig auf ihren dargestellten Tag.
- * Mit date (= „YYYY-MM-DD“) begrenzt das Backend auf die Buchungen, die
- * diesen Tag schneiden – die Tagesansicht nutzt das, um je Raum genau den
- * gewählten Tag zu holen.
+ * Buchungen eines Raums laden (GET /api/bookings?roomId=…) – Grundlage von
+ * Raumkalender UND Tagesansicht. Zwei Abrufformen mit klar getrennten
+ * Verträgen:
+ *
+ * – Ohne date liefert die API ALLE Buchungen des Raums; der Raumkalender
+ *   ruft so ab und filtert clientseitig auf seinen dargestellten Tag
+ *   (buchungenAmTag in pages/RoomCalendar.tsx).
+ *
+ * – Mit date („YYYY-MM-DD“) filtert das Backend SERVERSEITIG auf die
+ *   Buchungen, die diesen Tag schneiden (halboffenes Intervall; ein
+ *   unlesbares date ergibt eine leere Liste). Umsetzung:
+ *   listBookingsForRoom in backend/src/services/bookings.ts, Handler in
+ *   backend/src/routes/bookings.ts, Vertragstests in
+ *   backend/test/bookings.test.ts. Die Tagesansicht nutzt diese Form, um
+ *   je Raum genau den gewählten Tag zu laden.
  */
 export function listBookingsForRoom(
   roomId: number,

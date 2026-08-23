@@ -522,6 +522,55 @@ describe("Tagesansicht – Belegung je Raum", () => {
     expect(buchungsAbrufeFuer(1, tag)).toBe(2);
   });
 
+  it("fordert nach „Erneut versuchen“ die Buchungen je Raum bei jedem weiteren Datumswechsel genau einmal an", async () => {
+    const user = userEvent.setup();
+    const tag = "2026-08-21";
+    // Erster Lauf scheitert an der Standortliste …
+    installBackend({ locationsFehler: true });
+    renderAt(`/day/7?date=${tag}`);
+    await screen.findByTestId("dayview-error");
+
+    // … der Retry lädt mit heilem Backend (dieser Mock bleibt installiert).
+    const mock = installBackend({
+      buchungenJeRaum: {
+        1: [buchung(1, tag, "09:00", "10:00", "bestaetigt", 131)],
+        2: [],
+        3: [],
+      },
+    });
+    await user.click(screen.getByTestId("dayview-retry"));
+    expect(await screen.findByTestId("timegrid-lane-title-1")).toBeInTheDocument();
+
+    // Ein weiterer Datumswechsel NACH dem Retry: Genau ein Abruf je Raum des
+    // gewählten Standorts für den neuen Tag – kein Zweitlauf aus einem
+    // zweiten, ebenfalls auf Datum reagierenden Effekt (früherer Defekt).
+    await user.click(screen.getByTestId("dayview-next-day"));
+    await waitFor(() => {
+      expect(window.location.search).toBe("?date=2026-08-22");
+    });
+    // Der Folgetag ist im Seed buchungsfrei → Gitter mit Hinweisband ist da,
+    // sobald der neue Tag geladen hat.
+    expect(await screen.findByTestId("timegrid-no-bookings")).toBeVisible();
+
+    // Der Mock zählt seit dem Retry – dessen Abrufe des Ausgangstags sind
+    // legitim und je Raum genau einer. Entscheidend ist die Häufigkeit JE
+    // URL: Der Folgetag wurde nach dem Retry genau einmal je Raum angefordert,
+    // nicht doppelt aus zwei nebenläufigen Läufen.
+    const buchungsAbrufe = mock.mock.calls
+      .map((aufruf: [RequestInfo | URL]) => apiUrl(aufruf[0]))
+      .filter((pfad: string) => pfad.startsWith("/api/bookings?roomId="));
+    const anzahl = (pfad: string): number =>
+      buchungsAbrufe.filter((url: string) => url === pfad).length;
+    expect(anzahl("/api/bookings?roomId=1&date=2026-08-21")).toBe(1);
+    expect(buchungsAbrufe.length).toBe(4); // 2× Ausgangstag (Retry) + 2× Folgetag
+    expect(anzahl("/api/bookings?roomId=1&date=2026-08-22")).toBe(1);
+    expect(anzahl("/api/bookings?roomId=2&date=2026-08-22")).toBe(1);
+    // Räume anderer Standorte bleiben unangefragt.
+    expect(
+      buchungsAbrufe.some((url: string) => url.includes("roomId=3"))
+    ).toBe(false);
+  });
+
   it("greift in den Fehlerzustand, wenn auch nur eine Buchungsanfrage misslingt", async () => {
     const user = userEvent.setup();
 

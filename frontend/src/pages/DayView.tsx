@@ -210,6 +210,13 @@ export default function DayView() {
     [rawLocationId]
   );
 
+  // Ein einziger Effekt für Erstladen, Datumswechsel und „Erneut versuchen":
+  // Die beiden bisherigen Effekte teilten sich die Abhängigkeit ladeAlles und
+  // reagierten BEIDE auf Datum/Standort – nach dem ersten Retry (reloadTick >
+  // 0) lief dadurch jeder Datumswechsel doppelt und forderte die Buchungen
+  // aller Räume zweimal parallel an. Über den Tick im selben Abhängigkeits-
+  // satz startet jeder Auslöser genau einen Lauf; der Cleanup bricht den
+  // Vorgängerlauf ab, bevor er Zustand setzen kann.
   useEffect(() => {
     const controller = new AbortController();
     // Kein veralteter Beleg unter dem neuen Datum: Bei jedem (Neu-)Start der
@@ -219,16 +226,7 @@ export default function DayView() {
     );
     void ladeAlles(controller.signal, datum);
     return () => controller.abort();
-  }, [ladeAlles, datum]);
-
-  // Reload muss auf den Tick reagieren, nicht auf ladeAlles allein
-  // (dieselbe Konstruktion wie im Raumkalender).
-  useEffect(() => {
-    if (reloadTick === 0) return;
-    const controller = new AbortController();
-    void ladeAlles(controller.signal, datum);
-    return () => controller.abort();
-  }, [reloadTick, ladeAlles, datum]);
+  }, [ladeAlles, datum, reloadTick]);
 
   const nochmalLaden = useCallback(() => {
     setState({ phase: "loading" });
