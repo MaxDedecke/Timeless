@@ -381,6 +381,27 @@ describe("Tagesansicht – Zustände", () => {
     expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
   });
 
+  it("fällt unter /day ohne Auswahl auf den ersten Standort zurück und zeigt dessen Leerzustand, wenn er keine Räume hat", async () => {
+    // Nur Atelier Süd (id 8) besitzt Räume; Werkhaus – der Erststandort, auf
+    // den /day ohne Routensegment fällt – hat keine. Auch dieser Weg endet im
+    // aussagekräftigen Leerzustand, niemals in einem leeren Raster.
+    installBackend({
+      raeume: [RAEUME[2]], // nur Studio Süd gehört zu Standort 8
+    });
+    renderAt("/day");
+
+    const leer = await screen.findByTestId("timegrid-empty");
+    expect(leer).toHaveTextContent("Keine Räume für diesen Tag vorhanden.");
+    expect(leer).toHaveTextContent(
+      "Zu diesem Standort sind noch keine Räume angelegt"
+    );
+    expect(screen.getByTestId("dayview-location-name")).toHaveTextContent(
+      "Werkhaus"
+    );
+    expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timegrid-no-bookings")).not.toBeInTheDocument();
+  });
+
   it("zeigt ohne jedwede Standorte einen eigenen Leerzustand", async () => {
     installBackend({ standorte: [] });
     renderAt("/day");
