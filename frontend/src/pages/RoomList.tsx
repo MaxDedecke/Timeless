@@ -188,7 +188,7 @@ function RoomCard({ room }: { room: Room }) {
     <Card data-testid="room-card">
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
-          <CardTitle className="text-lg font-semibold leading-tight tracking-tight">
+          <CardTitle className="text-lg font-semibold">
             {room.name}
           </CardTitle>
           <span className="flex shrink-0 items-center gap-1 text-sm font-medium tabular-nums text-muted-foreground">

@@ -61,7 +61,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       {/* Kopf: Produktname mit Logo */}
       <div className="flex items-center gap-2 px-4 pb-6 pt-5">
         <CalendarCheck className="h-5 w-5 text-primary-tint" aria-hidden="true" />
-        <span className="text-lg font-semibold tracking-tight text-sidebar-foreground">
+        <span className="text-lg font-semibold text-sidebar-foreground">
           Timeless
         </span>
         <span className="sr-only">Raumbuchung der DesignFreak GmbH</span>
@@ -115,7 +115,7 @@ export default function Sidebar({
         >
           <Menu className="h-5 w-5" aria-hidden="true" />
         </Button>
-        <span className="text-base font-semibold tracking-tight">Timeless</span>
+        <span className="text-lg font-semibold">Timeless</span>
       </div>
 
       {/* … und das Off-Canvas-Panel von links (Sheet = Radix Dialog). */}
