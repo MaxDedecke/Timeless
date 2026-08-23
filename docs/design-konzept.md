@@ -123,6 +123,37 @@ Jede Ansicht mit Daten definiert alle drei Zustände explizit – der Erfolgsfal
 - **Leer:** zentrierte `EmptyState`-Card mit Icon, einem kurzen deutschen Satz und einer Handlung – z. B. Raumliste ohne Treffer: „Keine Räume entsprechen deinem Filter." + Button „Filter zurücksetzen"; „Meine Buchungen" ohne Einträge: „Du hast noch keine Buchungen." + „Jetzt Raum buchen"; Tagesansicht ohne Termine: dezentes Hinweisband über dem Zeitgitter, Gitter bleibt sichtbar (freie Fenster sind hier fachlich korrekt, kein Fehlerzustand).
 - **Fehler:** blockierende Fehler inline als `Alert` (destructive) mit verständlicher Meldung und, wo sinnvoll, „Erneut versuchen" – z. B. Konfliktprüfung (Anforderung 8) meldet im Buchungsdialog den kollidierenden Zeitraum konkret („Dieser Raum ist bereits von 14:00 bis 15:30 gebucht."). Feldvalidierungsfehler stehen klein und rot unter dem jeweiligen Feld. Globale API-Ausfälle erscheinen zusätzlich als Banner über dem Seiteninhalt. Toasts tragen nur Erfolge.
 
+Die folgenden drei Abschnitte heben die mit Sprint 2 umgesetzten Muster (Referenz-Umsetzung: `frontend/src/pages/RoomList.tsx`, `frontend/src/pages/RoomForm.tsx`) von der allgemeinen Beschreibung oben auf verbindliche Bausteine: Jede neue datengetriebene Ansicht baut sie so nach, statt eigene Varianten zu erfinden.
+
+## Ladezustand
+
+Während Daten geladen werden, zeigt die Ansicht shadcn/ui-**Skeleton**-Flächen in der Layoutform der Zielsicht – nie freischwebende Spinner:
+
+- **Listen/Raster** (`RoomList.tsx`, `RoomsSkeleton`): Raster aus sechs Card-Skeletons im Listenraster (`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3`); je Karte zwei Kopfzeilen-Skelette (Titel `h-5`, Beschreibung `h-4`) und drei Badge-Skelette (`h-5 rounded-md`).
+- **Formulare** (`RoomForm.tsx`, `FormSkeleton`): eine Card mit Skeletten für Titel/Beschreibung, je Feld Label- plus Input-Skelett (`h-10`) in derselben Spaltenaufteilung wie das echte Formular (dreispaltig ab `sm`), drei Checkbox-Paare für die Merkmale und ein rechtsbündiges Button-Skelett.
+- **Teilbereiche** (`AmenityFilter.tsx`): Eine Sektion, die ihre Daten selbst nachlädt, zeigt ihr Skeleton inline innerhalb ihrer Card (vier Checkbox-Paar-Skelette) und blockiert nicht die ganze Seite.
+- Der Ladepfad ist mit `aria-busy="true"` markiert. Ein erneutes Laden (nach Fehler oder Nutzeraktion) zeigt dasselbe Skeleton erneut, statt den alten Inhalt einzufrieren.
+
+Buchungsformular, Raumkalender und Tagesansicht übernehmen dieses Muster unverändert – Skeleton in der Layoutform der jeweiligen Zielsicht – statt eigene Ladeindikatoren zu erfinden.
+
+## Fehleranzeige
+
+Zwei getrennte Fälle, beide über shadcn/ui-**Alert** mit `variant="destructive"`:
+
+- **Ladefehler einer Ansicht** (`RoomList.tsx`, `RoomsError`): `AlertCircle`-Icon (`h-4 w-4`), knapper `AlertTitle` („Räume konnten nicht geladen werden"), verständlicher `AlertDescription` und darin ein „Erneut versuchen"-Button (`variant="destructive" size="sm"`, `RotateCw`-Icon), der denselben Ladevorgang neu anstößt und die Ansicht zuvor in den Ladezustand (Skeleton) zurücksetzt. Bleibt die Ansicht unbenutzbar, kommt ein Ausweg als zweiter Button hinzu („Zurück zur Raumliste", `variant="outline"`, wie im Formular-Ladefehler von `RoomForm.tsx`). Sekundäre Ladequellen (z. B. Filter-Katalog in `AmenityFilter.tsx`) melden ihren Fehler dezenter inline in der eigenen Card – Meldungstext plus `outline`-„Erneut versuchen" – statt die ganze Seite zu blockieren.
+- **Speicherfehler im Formular** (`RoomForm.tsx`): Während des Absendens ist der Submit-Button deaktiviert (`disabled={saving}`) und zeigt einen Inline-Spinner (`h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent`, `aria-hidden`) vor dem Label – damit ist kein Doppel-Submit möglich. Schlägt das Speichern fehl, erscheint oberhalb der Buttonzeile ein destructives Alert („Speichern fehlgeschlagen" + konkrete Meldung); das Formular bleibt offen und alle Eingaben bleiben erhalten. Der Alert wird mit dem nächsten Submit sofort entfernt (`setSaveError(null)` am Anfang des Handlers, auch wenn die Client-Validierung anschließend abbricht) – kein veralteter Fehler über einer neuen Eingabe.
+
+Feldvalidierungsfehler sind kein Alert-Fall: Sie stehen klein und rot (`text-xs text-destructive`) unter dem jeweiligen Feld (siehe „Zustände"). Buchungsformular, Raumkalender und Tagesansicht übernehmen beide Fälle unverändert statt eigene Varianten zu erfinden.
+
+## Leerzustand
+
+„Noch nichts angelegt" und „Filter liefert keinen Treffer" sind zwei Zustände mit eigenem Text und eigener Aktion (beide in `RoomList.tsx`). Gemeinsame Form: zentrierte shadcn/ui-**Card** (`px-6 py-14 text-center`) mit lucide-Icon (`h-8 w-8 text-muted-foreground`, `aria-hidden`), Kernaussage in `text-base font-medium`, Erläuterung in `text-sm text-muted-foreground`, Aktionen darunter:
+
+- **Noch nichts angelegt** (`RoomsEmpty`, Icon `Inbox`): benennt den Ist-Zustand („Noch keine Räume angelegt.") und führt weiter mit dem Anlegen-CTA als echtem Router-Link im Button-Look (`asChild`, „Raum anlegen") plus sekundärer „Liste neu laden"-Aktion (`variant="outline"`).
+- **Filter ohne Treffer** (`NoMatchesEmpty`, Icon `SearchX`): Es existieren Räume, aber keiner erfüllt die gewählte Merkmalskombination – die Aktion ist daher ausschließlich „Filter zurücksetzen" (`variant="outline"`), nicht das Anlegen eines Raums.
+
+Beide Varianten kombinieren Card und Button aus dem shadcn-Bestand, ohne eigene UI-Primitive. Wo Leere fachlich korrekt ist (Tagesansicht ohne Termine: freie Fenster sind Ergebnis, kein Fehler), gilt das Hinweisband-Muster aus „Zustände", kein Empty State über dem Gitter. Buchungsformular, Raumkalender und Tagesansicht übernehmen diese Trennung unverändert statt eigene Varianten zu erfinden.
+
 ## Responsive-Verhalten
 
 Mobile-first; maßgebliche Schwellen: `sm` 640, `md` 768, `lg` 1024 (Sidebar-Schwelle), `xl` 1280.
