@@ -174,11 +174,17 @@ describe("RoomCalendar – Belegfall", () => {
     });
     renderAt("/rooms/1");
 
-    // Kopf: Raumname, Standort und Kapazität.
+    // Kopf: Raumname, Standort, Kapazität – Datums-/Zahlenangaben mit
+    // tabellarischen Ziffern (Konzept-Pflicht, Design-Review).
     expect(
       await screen.findByRole("heading", { name: "Atelier Nord", level: 1 })
     ).toBeInTheDocument();
     expect(screen.getByText("Werkhaus")).toBeInTheDocument();
+    expect(screen.getByTestId("room-calendar-date-label")).toHaveClass(
+      "tabular-nums"
+    );
+    const kapazitaet = screen.getByText(/Personen/);
+    expect(kapazitaet).toHaveClass("tabular-nums");
 
     // Zwei belegte Slots, sortiert nach Beginn, mit formatierten Zeiten.
     const belegt = await screen.findAllByTestId("timegrid-slot-booked");
@@ -236,6 +242,7 @@ describe("RoomCalendar – Leerfall", () => {
     const frei = within(gitter).getAllByTestId("timegrid-slot-free");
     expect(frei).toHaveLength(1); // genau das ganze Tagesfenster 08:00–20:00
     expect(frei[0]).toHaveTextContent("08:00 – 20:00");
+    expect(within(frei[0]).getByText(/08:00/)).toHaveClass("tabular-nums");
     expect(
       screen.queryByTestId("timegrid-slot-booked")
     ).not.toBeInTheDocument();

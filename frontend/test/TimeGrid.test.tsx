@@ -75,6 +75,12 @@ describe("TimeGrid – Slot-Darstellung", () => {
     }
     expect(freeSlots[0]).toHaveTextContent("08:00 – 09:00");
     expect(freeSlots[1]).toHaveTextContent("10:00 – 20:00");
+
+    // Konzept-Pflicht „tabular-nums“ gilt auch für die freien Fenster,
+    // nicht nur für belegte Slots und Badges.
+    for (const free of freeSlots) {
+      expect(within(free).getByText(/08:00|10:00/)).toHaveClass("tabular-nums");
+    }
   });
 
   it("mappt den Buchungsstatus über BookingStatusBadge (ausstehend → Warning)", () => {
@@ -156,6 +162,10 @@ describe("TimeGrid – Slot-Darstellung", () => {
     expect(slot).toBeInTheDocument();
     expect(slot).toHaveTextContent("Zeitangabe unlesbar");
     expect(slot).toHaveTextContent("Bestätigt");
+    // Auch der Platzhalter-Hinweis ist ein Zeitlabel im Raster → tabellarische Ziffern.
+    expect(within(slot).getByText("Zeitangabe unlesbar")).toHaveClass(
+      "tabular-nums"
+    );
   });
 });
 

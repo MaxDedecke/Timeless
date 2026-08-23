@@ -210,10 +210,12 @@ function FreeSlot({ slot }: FreeSlotProps) {
       )}
       style={{ height: heightStyle(slot) }}
     >
-      <span className="tabular-nums">
-        {labelAt(slot, "start")} – {labelAt(slot, "end")}
+      <span className="flex items-center gap-2">
+        <span className="tabular-nums">
+          {labelAt(slot, "start")} – {labelAt(slot, "end")}
+        </span>
+        <span className="sr-only">frei</span>
       </span>
-      <span className="sr-only">frei</span>
     </div>
   );
 }

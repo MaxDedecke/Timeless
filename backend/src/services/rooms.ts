@@ -93,12 +93,19 @@ async function withAmenities(
   rows: RoomBaseRow[]
 ): Promise<RoomWithAmenities[]> {
   if (rows.length === 0) return [];
+  // IN-Liste als echte Platzhalter ($1, $2 …) zu den Werten: Literale ohne
+  // $-Präfix würden die mitgegebenen Werte zählen lassen und an echter
+  // Postgres mit „supplies N parameters, but prepared statement requires 0"
+  // brechen (pg-mem der Vertragstests toleriert überschüssige Werte).
+  const plaetze = rows
+    .map((_: RoomBaseRow, i: number) => "$" + String(i + 1))
+    .join(", ");
   const amenityRows = (
     await exec.query(
       `SELECT ra.room_id::int AS "roomId", a.key, a.label
        FROM room_amenities ra
        JOIN amenities a ON a.id = ra.amenity_id
-       WHERE ra.room_id IN (${rows.map((_, i) => `${i + 1}`).join(", ")})
+       WHERE ra.room_id IN (${plaetze})
        ORDER BY ra.room_id, a.key`,
       rows.map((row) => row.id)
     )
