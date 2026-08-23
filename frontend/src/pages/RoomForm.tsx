@@ -392,6 +392,7 @@ export default function RoomForm({ mode }: RoomFormProps) {
                     <span
                       className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
                       aria-hidden="true"
+                      data-testid="room-save-spinner"
                     />
                   )}
                   {isEdit ? "Änderungen speichern" : "Raum anlegen"}
