@@ -142,16 +142,21 @@ test("InMemoryDb: Abfrage gegen nicht existierende Tabelle führt zu einem verst
 
 const EXPECTED_TABLES = [
   "amenities",
+  "bookings",
   "locations",
   "room_amenities",
   "rooms",
 ] as const;
 
-test("applyMigrations erzeugt alle Tabellen aus 001 und 002", async () => {
+test("applyMigrations erzeugt alle Tabellen aus 001 bis 003", async () => {
   const db = new InMemoryDb();
   try {
     const applied = await db.applyMigrations();
-    assert.deepEqual(applied, ["001_locations_rooms.sql", "002_amenities.sql"]);
+    assert.deepEqual(applied, [
+      "001_locations_rooms.sql",
+      "002_amenities.sql",
+      "003_bookings.sql",
+    ]);
 
     // Introspektion über den pg-Katalog statt Annahme: Nur so ist bewiesen,
     // dass die Tabellen tatsächlich existieren und nicht nur „nichts schiefging“.

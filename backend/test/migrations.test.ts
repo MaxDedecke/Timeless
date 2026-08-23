@@ -11,6 +11,27 @@ const MIGRATION_FILE = path.join(
   "../src/db/migrations/001_locations_rooms.sql"
 );
 
+const BOOKINGS_MIGRATION_FILE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../src/db/migrations/003_bookings.sql"
+);
+
+/** Feste Testzeitpunkte für Buchungszeilen (UTC, Inhalt beliebig aber konstant). */
+const STARTS_AT = "2026-08-24T10:00:00Z";
+const ENDS_AT = "2026-08-24T11:00:00Z";
+
+/** Legt Standort + Raum frisch an und liefert die Raum-ID (pg-mem gibt BIGINT als String). */
+async function createTestRoom(db: InMemoryDb, name: string): Promise<number> {
+  const loc = await db.query<{ id: number }>(
+    "INSERT INTO locations (name) VALUES ('Teststandort') RETURNING id::int AS id"
+  );
+  const room = await db.query<{ id: number }>(
+    "INSERT INTO rooms (name, location_id, capacity) VALUES ($1, $2, 8) RETURNING id::int AS id",
+    [name, loc.rows[0].id]
+  );
+  return room.rows[0].id;
+}
+
 // ---------------------------------------------------------------------------
 // Teil 1: Statische Prüfung der SQL-Datei.
 // ---------------------------------------------------------------------------
@@ -33,6 +54,24 @@ test("Migration 001 enthält rooms (id, name, location_id, capacity)", async () 
 test("rooms.location_id ist per NOT NULL + Fremdschlüssel an locations gebunden", async () => {
   const sql = await readFile(MIGRATION_FILE, "utf8");
   assert.match(sql, /location_id\s+BIGINT NOT NULL REFERENCES locations\s*\(id\)/);
+});
+
+test("Migration 003 existiert und enthält bookings mit allen Pflichtspalten", async () => {
+  const sql = await readFile(BOOKINGS_MIGRATION_FILE, "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS bookings/);
+  assert.match(sql, /id\s+BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY/);
+  // Urheber-Feld: bis zur Users-/SSO-Klärung als Text geführt.
+  assert.match(sql, /created_by\s+TEXT NOT NULL/);
+  assert.match(sql, /starts_at\s+TIMESTAMPTZ NOT NULL/);
+  assert.match(sql, /ends_at\s+TIMESTAMPTZ NOT NULL/);
+});
+
+test("bookings.room_id ist NOT NULL, per FK an rooms gebunden und Löschverhalten ist definiert", async () => {
+  const sql = await readFile(BOOKINGS_MIGRATION_FILE, "utf8");
+  assert.match(
+    sql,
+    /room_id\s+BIGINT NOT NULL REFERENCES rooms\s*\(id\)\s*ON DELETE RESTRICT/
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -102,7 +141,11 @@ test("DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich 
   const db = new InMemoryDb();
   try {
     const applied = await runMigrations(db);
-    assert.deepEqual(applied, ["001_locations_rooms.sql", "002_amenities.sql"]);
+    assert.deepEqual(applied, [
+      "001_locations_rooms.sql",
+      "002_amenities.sql",
+      "003_bookings.sql",
+    ]);
 
     // Zweiter Lauf über denselben connect()-Client-Pfad: Das CREATE TABLE IF
     // NOT EXISTS für schema_migrations trifft jetzt ein existierendes Objekt
@@ -119,6 +162,87 @@ test("DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich 
 
     const third = await runMigrations(db);
     assert.deepEqual(third, []);
+
+    // Die neue Buchungs-Tabelle ist Teil des Schemas und bleibt vom
+    // wiederholten Lauf unberührt (leer, solange nichts hineingeschrieben wurde).
+    const bookingsCount = await db.query<{ n: number }>(
+      "SELECT COUNT(*)::int AS n FROM bookings"
+    );
+    assert.equal(bookingsCount.rows[0].n, 0);
+  } finally {
+    await db.end();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Migration 003 (Buchungen): dieselben DB-Integrationssätze wie oben gegen die
+// In-Memory-Postgres – Referenzierbarkeit eines buchungsfreien Raums,
+// Status-Default, FK-Fehlerfall und Löschverhalten.
+// ---------------------------------------------------------------------------
+
+test("DB: Buchung auf gültigen Raum anlegen – Zeile lesbar und Status-Default 'bestaetigt' gesetzt", async () => {
+  const db = await InMemoryDb.migrated();
+  try {
+    const roomId = await createTestRoom(db, "Konferenzraum Ost");
+    const res = await db.query<{ id: number; status: string }>(
+      "INSERT INTO bookings (room_id, created_by, starts_at, ends_at) " +
+        "VALUES ($1, $2, $3::timestamptz, $4::timestamptz) RETURNING id::int AS id, status",
+      [roomId, "mitarbeiter@example.com", STARTS_AT, ENDS_AT]
+    );
+
+    assert.ok(res.rows[0].id > 0);
+    assert.equal(res.rows[0].status, "bestaetigt");
+
+    // Der buchungsfreie Raum lässt sich referenzieren – hier per Rücklesen
+    // über den FK belegt.
+    const back = await db.query<{ room_id: number; created_by: string }>(
+      "SELECT room_id::int AS room_id, created_by FROM bookings WHERE id = $1",
+      [res.rows[0].id]
+    );
+    assert.equal(back.rows[0].room_id, roomId);
+    assert.equal(back.rows[0].created_by, "mitarbeiter@example.com");
+  } finally {
+    await db.end();
+  }
+});
+
+test("DB: Buchung mit unbekannter room_id wird vom Fremdschlüssel abgelehnt", async () => {
+  const db = await InMemoryDb.migrated();
+  try {
+    await assert.rejects(
+      db.query(
+        "INSERT INTO bookings (room_id, created_by, starts_at, ends_at) " +
+          "VALUES ($1, $2, $3::timestamptz, $4::timestamptz)",
+        [999999, "mitarbeiter@example.com", STARTS_AT, ENDS_AT]
+      )
+    );
+  } finally {
+    await db.end();
+  }
+});
+
+test("DB: Löschen eines Raums mit Buchung wird durch ON DELETE RESTRICT verweigert", async () => {
+  const db = await InMemoryDb.migrated();
+  try {
+    const roomId = await createTestRoom(db, "Konferenzraum West");
+    await db.query(
+      "INSERT INTO bookings (room_id, created_by, starts_at, ends_at) " +
+        "VALUES ($1, $2, $3::timestamptz, $4::timestamptz)",
+      [roomId, "mitarbeiter@example.com", STARTS_AT, ENDS_AT]
+    );
+
+    // RESTRICT: Das DELETE muss scheitern und darf keine Buchung mitlöschen.
+    await assert.rejects(db.query("DELETE FROM rooms WHERE id = $1", [roomId]));
+
+    const remaining = await db.query<{ n: number }>(
+      "SELECT COUNT(*)::int AS n FROM bookings WHERE room_id = $1",
+      [roomId]
+    );
+    assert.equal(
+      remaining.rows[0].n,
+      1,
+      "RESTRICT darf keine Buchung kaskadierend mitlöschen"
+    );
   } finally {
     await db.end();
   }
