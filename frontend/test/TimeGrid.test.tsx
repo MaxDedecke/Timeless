@@ -1,0 +1,289 @@
+import "@testing-library/jest-dom/vitest";
+
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import TimeGrid, {
+  type TimeGridBooking,
+  type TimeGridLane,
+} from "../src/components/TimeGrid";
+
+/**
+ * TimeGrid: gemeinsames Zeitraster für Raumkalender und Tagesansicht.
+ * Geprüft wird die Slot-Darstellung laut Konzept: belegte Slots mit
+ * formatTime-Beschriftung (lib/format, de-DE, HH:mm) und BookingStatusBadge,
+ * freie Slots visuell über das Muted-Token abgesetzt, dazu alle drei
+ * Zustände (lädt als Skeleton im Rasterlayout, Fehler als destructives
+ * Alert mit „Erneut versuchen“, Leere als eigene Card) und die Zuordnung
+ * der Buchungen zu ihrer Spur bei mehreren Räumen. Reines jsdom-Rendering
+ * ohne Radix-Formularelemente – kein ResizeObserver-Stub nötig.
+ */
+
+function lane(id: number, title: string, bookings: TimeGridBooking[]): TimeGridLane {
+  return { id, title, bookings };
+}
+
+afterEach(() => {
+  // cleanup() ist nötig, weil vitest mit globals:false läuft und
+  // @testing-library/react daher kein Auto-Cleanup registriert.
+  cleanup();
+});
+
+describe("TimeGrid – Slot-Darstellung", () => {
+  it("zeigt einen belegten Slot mit formatTime-Zeiten und Status-Badge", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 101, start: "2026-08-23T09:05:00", end: "2026-08-23T10:30:00", status: "bestaetigt" },
+          ]),
+        ]}
+      />
+    );
+
+    const booked = screen.getByTestId("timegrid-slot-booked");
+    // Formatierung ausschließlich über lib/format: „HH:mm“ mit führenden Nullen.
+    expect(booked).toHaveTextContent("09:05 – 10:30");
+    const badge = within(booked).getByText("Bestätigt");
+    expect(badge).toHaveClass("bg-success-background");
+    // Konzept-Pflicht: Uhrzeiten im Zeitraster mit tabellarischen Ziffern.
+    expect(within(booked).getByText(/09:05/)).toHaveClass("tabular-nums");
+  });
+
+  it("setzt freie Slots visuell über den Muted-Token vom Beleg ab", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 101, start: "09:00", end: "10:00", status: "bestaetigt" },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId("timegrid-slot-booked")).toHaveClass("bg-primary-tint");
+
+    const freeSlots = screen.getAllByTestId("timegrid-slot-free");
+    // Vor und nach der Buchung je ein freies Fenster (08:00–09:00, 10:00–20:00).
+    expect(freeSlots).toHaveLength(2);
+    for (const free of freeSlots) {
+      expect(free).toHaveClass("bg-muted");
+      expect(free).toHaveClass("border-dashed");
+    }
+    expect(freeSlots[0]).toHaveTextContent("08:00 – 09:00");
+    expect(freeSlots[1]).toHaveTextContent("10:00 – 20:00");
+  });
+
+  it("mappt den Buchungsstatus über BookingStatusBadge (ausstehend → Warning)", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Werkstatt Ost", [
+            { id: 102, start: "14:00", end: "15:30", status: "ausstehend" },
+          ]),
+        ]}
+      />
+    );
+
+    const badge = within(screen.getByTestId("timegrid-slot-booked")).getByText(
+      "Ausstehend"
+    );
+    expect(badge).toHaveClass("bg-warning-background");
+    expect(badge).toHaveClass("text-warning");
+  });
+
+  it("rendert direkt aneinander grenzende Buchungen ohne dazwischenliegenden freien Slot", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 101, start: "09:00", end: "10:00", status: "bestaetigt" },
+            { id: 102, start: "10:00", end: "11:00", status: "eingecheckt" },
+          ]),
+        ]}
+      />
+    );
+
+    const booked = screen.getAllByTestId("timegrid-slot-booked");
+    expect(booked).toHaveLength(2);
+    expect(booked[0]).toHaveTextContent("09:00 – 10:00");
+    expect(booked[1]).toHaveTextContent("10:00 – 11:00");
+    // Nur Morgen- und Nachmittagsfenster bleiben frei.
+    expect(screen.getAllByTestId("timegrid-slot-free")).toHaveLength(2);
+  });
+
+  it("fasst überlappende Buchungen zu einem durchgehenden Beleg zusammen", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 101, start: "09:00", end: "11:00", status: "bestaetigt" },
+            { id: 102, start: "10:00", end: "12:00", status: "bestaetigt" },
+          ]),
+        ]}
+      />
+    );
+
+    // Sollte dank Konfliktprüfung nicht vorkommen – das Raster zeichnet es
+    // trotzdem nicht doppelt oder negativ.
+    const booked = screen.getAllByTestId("timegrid-slot-booked");
+    expect(booked).toHaveLength(1);
+    expect(booked[0]).toHaveTextContent("09:00 – 12:00");
+  });
+
+  it("zeigt eine Buchung mit unlesbaren Zeiten als erkennbaren Block statt sie zu verstecken", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 101, start: "keine Angabe", end: "", status: "bestaetigt" },
+          ]),
+        ]}
+      />
+    );
+
+    // Eine kaputte Angabe darf keine Ansicht crashen und den Beleg still
+    // verschwinden lassen (Konzept lib/format): Der Block bleibt sichtbar,
+    // mit Hinweistext statt erfundener Zeiten.
+    const slot = screen.getByTestId("timegrid-slot-booked");
+    expect(slot).toBeInTheDocument();
+    expect(slot).toHaveTextContent("Zeitangabe unlesbar");
+    expect(slot).toHaveTextContent("Bestätigt");
+  });
+});
+
+describe("TimeGrid – Spuren", () => {
+  it("ordnet bei mehreren Spuren jede Buchung ihrer eigenen Spur zu", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 101, start: "09:00", end: "10:00", status: "bestaetigt" },
+          ]),
+          lane(2, "Kreativraum Süd", [
+            { id: 201, start: "11:00", end: "12:00", status: "ausstehend" },
+          ]),
+        ]}
+      />
+    );
+
+    const nord = screen.getByTestId("timegrid-lane-1");
+    const sued = screen.getByTestId("timegrid-lane-2");
+    expect(within(nord).getByTestId("timegrid-lane-title-1")).toHaveTextContent(
+      "Atelier Nord"
+    );
+    expect(within(sued).getByTestId("timegrid-lane-title-2")).toHaveTextContent(
+      "Kreativraum Süd"
+    );
+
+    // Atelier Nord kennt nur seine Buchung – nicht die des anderen Raums.
+    expect(within(nord).getAllByTestId("timegrid-slot-booked")).toHaveLength(1);
+    expect(within(nord).getByText("09:00 – 10:00")).toBeInTheDocument();
+    expect(within(sued).getAllByTestId("timegrid-slot-booked")).toHaveLength(1);
+    expect(within(sued).getByText("11:00 – 12:00")).toBeInTheDocument();
+    expect(within(nord).queryByText("11:00 – 12:00")).not.toBeInTheDocument();
+  });
+});
+
+describe("TimeGrid – Zustände", () => {
+  it("zeigt beim Laden ein Skeleton im Rasterlayout statt des Gitters", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        isLoading
+        lanes={[lane(1, "Atelier Nord", [])]}
+      />
+    );
+
+    const loading = screen.getByTestId("timegrid-loading");
+    expect(loading).toBeVisible();
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timegrid-slot-booked")).not.toBeInTheDocument();
+  });
+
+  it("zeigt bei Ladefehler ein destructives Alert, dessen „Erneut versuchen“ onRetry auslöst", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(<TimeGrid onRetry={onRetry} error lanes={[]} />);
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Zeitraster konnte nicht geladen werden");
+    expect(within(alert).getByText("Erneut versuchen")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("timegrid-retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("zeigt ohne Spuren einen eigenen Leerzustand mit Neuladen", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(<TimeGrid onRetry={onRetry} lanes={[]} />);
+
+    const empty = screen.getByTestId("timegrid-empty");
+    expect(empty).toBeVisible();
+    expect(empty).toHaveTextContent(
+      "Keine Räume für diesen Tag vorhanden."
+    );
+    expect(screen.queryByTestId("timegrid-grid")).not.toBeInTheDocument();
+
+    await user.click(
+      within(empty).getByRole("button", { name: "Neu laden" })
+    );
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("bleibt bei Spuren ohne Buchungen im Gitter und zeigt nur das Hinweisband", async () => {
+    const onRetry = vi.fn();
+    render(
+      <TimeGrid
+        onRetry={onRetry}
+        lanes={[
+          lane(1, "Atelier Nord", []),
+          lane(2, "Kreativraum Süd", []),
+        ]}
+      />
+    );
+
+    // Freie Fenster sind fachlich korrekt kein Fehlerzustand (Konzept):
+    // Hinweisband darüber, Gitter bleibt sichtbar.
+    const hint = screen.getByTestId("timegrid-no-bookings");
+    expect(hint).toBeVisible();
+    expect(hint).toHaveTextContent(
+      "Für diesen Tag sind noch keine Buchungen vorhanden"
+    );
+    const grid = screen.getByTestId("timegrid-grid");
+    expect(grid).toBeVisible();
+    // Je leerer Spur genau EIN freies Tagesslot (08:00–20:00).
+    const freeSlots = within(grid).getAllByTestId("timegrid-slot-free");
+    expect(freeSlots).toHaveLength(2);
+    for (const free of freeSlots) {
+      expect(free).toHaveTextContent("08:00 – 20:00");
+    }
+  });
+
+  it("zeigt das Hinweisband nicht, sobald mindestens eine Spur belegt ist", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", []),
+          lane(2, "Kreativraum Süd", [
+            { id: 201, start: "11:00", end: "12:00", status: "bestaetigt" },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId("timegrid-no-bookings")).not.toBeInTheDocument();
+    expect(screen.getByTestId("timegrid-grid")).toBeInTheDocument();
+  });
+});
