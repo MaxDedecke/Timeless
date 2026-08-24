@@ -487,7 +487,9 @@ describe("Tagesansicht – Belegung je Raum", () => {
     // Tag als date-Parameter, für jeden Raum DES GEWÄHLTEN Standorts genau
     // einmal; der Raum des anderen Standorts wird nicht abgefragt.
     const abrufe = mock.mock.calls
-      .map((aufruf: [RequestInfo | URL]) => apiUrl(aufruf[0]))
+      .map(
+        (aufruf: [RequestInfo | URL, RequestInit?]) => apiUrl(aufruf[0])
+      )
       .filter((pfad: string) => pfad.startsWith("/api/bookings?roomId="));
     expect(abrufe).toEqual([
       "/api/bookings?roomId=1&date=2026-08-21",
@@ -524,7 +526,7 @@ describe("Tagesansicht – Belegung je Raum", () => {
     // … und genau ein Buchungsabruf je Raum zu diesem Tag.
     const buchungsAbrufeFuer = (raumId: number, tagIso: string): number =>
       mock.mock.calls.filter(
-        (aufruf: [RequestInfo | URL]) =>
+        (aufruf: [RequestInfo | URL, RequestInit?]) =>
           apiUrl(aufruf[0]) === `/api/bookings?roomId=${raumId}&date=${tagIso}`
       ).length;
     expect(buchungsAbrufeFuer(1, tag)).toBe(1);
@@ -588,7 +590,9 @@ describe("Tagesansicht – Belegung je Raum", () => {
     // URL: Der Folgetag wurde nach dem Retry genau einmal je Raum angefordert,
     // nicht doppelt aus zwei nebenläufigen Läufen.
     const buchungsAbrufe = mock.mock.calls
-      .map((aufruf: [RequestInfo | URL]) => apiUrl(aufruf[0]))
+      .map(
+        (aufruf: [RequestInfo | URL, RequestInit?]) => apiUrl(aufruf[0])
+      )
       .filter((pfad: string) => pfad.startsWith("/api/bookings?roomId="));
     const anzahl = (pfad: string): number =>
       buchungsAbrufe.filter((url: string) => url === pfad).length;
@@ -691,5 +695,110 @@ describe("Tagesansicht – Navigation", () => {
     // Der Menüpunkt zeigt ohne Standort-Segment auf /day – der Fallback
     // greift dann (Deep-Linking über die URL statt <select>).
     expect(tagesLink).toHaveAttribute("href", "/day");
+  });
+});
+
+describe("Tagesansicht – Check-in der laufenden eigenen Buchung", () => {
+  /**
+   * Zeiten relativ zur REALEN Uhrzeit statt Fake-Timern: Beginn vor 3,
+   * Ende in 57 Minuten – die Buchung läuft garantiert und ihr
+   * Check-in-Fenster ([Beginn, Beginn+Frist)) umfasst „jetzt" für die
+   * Dauer des Tests, egal wie viele Millisekunden vergehen.
+   */
+  function laufendeZeiten(): { start: string; end: string } {
+    const jetzt = Date.now();
+    return {
+      start: new Date(jetzt - 3 * 60_000).toISOString(),
+      end: new Date(jetzt + 57 * 60_000).toISOString(),
+    };
+  }
+
+  /** localStorage-Naht auf die Test-Person setzen (wie nach einem Login). */
+  function alsNutzer(email: string): void {
+    window.localStorage.setItem("timeless.currentUser", email);
+  }
+
+  afterEach(() => {
+    window.localStorage.removeItem("timeless.currentUser");
+  });
+
+  it("zeigt den Button an der laufenden eigenen Buchung, checkt ein und lädt NUR die betroffene Raumspur neu", async () => {
+    const user = userEvent.setup();
+    alsNutzer("mitarbeiter@example.com");
+    const listeRaum1: MockBuchung[] = [
+      {
+        id: 141,
+        roomId: 1,
+        createdBy: "mitarbeiter@example.com",
+        startsAt: laufendeZeiten().start,
+        endsAt: laufendeZeiten().end,
+        status: "bestaetigt",
+      },
+    ];
+    const mock = installBackend({
+      // Per Referenz: Der Check-in-Handler mutiert denselben Eintrag, den
+      // der Buchungslisten-Mock bei jedem GET erneut ausliest.
+      buchungenJeRaum: { 1: listeRaum1, 2: [] },
+      onCheckIn: (id) => {
+        const eintrag = listeRaum1.find((b) => b.id === id)!;
+        eintrag.status = "eingecheckt";
+        return jsonResponse(eintrag, 200);
+      },
+    });
+
+    renderAt("/day/7");
+    await screen.findByTestId("timegrid-lane-title-1");
+
+    const button = within(screen.getByTestId("timegrid-lane-1")).getByTestId(
+      "timegrid-checkin-141"
+    );
+    await user.click(button);
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("timegrid-lane-1")).queryByTestId(
+          "timegrid-checkin-141"
+        )
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      within(screen.getByTestId("timegrid-lane-1")).getAllByText("Eingecheckt")
+    ).toHaveLength(1);
+    expect(
+      within(screen.getByTestId("timegrid-lane-2")).queryByText("Eingecheckt")
+    ).not.toBeInTheDocument();
+
+    // Gezielter Refetch: Nur Raum 1 wurde nach dem Check-in erneut angefragt.
+    const abrufeRaum1 = mock.mock.calls.filter(
+      (aufruf: [RequestInfo | URL, RequestInit?]) =>
+        apiUrl(aufruf[0]).startsWith("/api/bookings?roomId=1")
+    );
+    expect(abrufeRaum1.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("zeigt keinen Check-in bei fremder oder nicht laufender Buchung", async () => {
+    alsNutzer("mitarbeiter@example.com");
+    installBackend({
+      buchungenJeRaum: {
+        // Fremde, LAUFENDE Buchung im Raum 1 (heutiger Tag ist das Default) …
+        1: [
+          {
+            id: 151,
+            roomId: 1,
+            createdBy: "andere@designfreak.de",
+            startsAt: laufendeZeiten().start,
+            endsAt: laufendeZeiten().end,
+            status: "bestaetigt",
+          },
+        ],
+        2: [],
+      },
+    });
+    renderAt("/day/7");
+
+    const spur1 = await screen.findByTestId("timegrid-lane-1");
+    expect(within(spur1).getAllByTestId("timegrid-slot-booked")).toHaveLength(1);
+    // Fremde Urheberschaft → kein Button, obwohl die Buchung läuft.
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
   });
 });

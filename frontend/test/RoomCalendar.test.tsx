@@ -623,17 +623,6 @@ describe("RoomCalendar – Check-in der laufenden eigenen Buchung", () => {
     window.localStorage.removeItem("timeless.currentUser");
   });
 
-  function eingcheckteVersion(id: number): MockBuchung {
-    return {
-      id,
-      roomId: 1,
-      createdBy: "mitarbeiter@example.com",
-      startsAt: `${heute()}T10:00:00.000Z`,
-      endsAt: `${heute()}T11:00:00.000Z`,
-      status: "eingecheckt",
-    };
-  }
-
   it("zeigt an der laufenden eigenen Buchung den Check-in-Button, checkt ein und lädt die Liste neu", async () => {
     const user = userEvent.setup();
     alsNutzer("mitarbeiter@example.com");
@@ -671,7 +660,7 @@ describe("RoomCalendar – Check-in der laufenden eigenen Buchung", () => {
       ).not.toBeInTheDocument();
     });
     const listenAbrufe = mock.mock.calls.filter(
-      (aufruf: [RequestInfo | URL]) =>
+      (aufruf: [RequestInfo | URL, RequestInit?]) =>
         apiUrl(aufruf[0]).startsWith("/api/bookings?roomId=1")
     );
     expect(listenAbrufe.length).toBeGreaterThanOrEqual(2);
@@ -725,73 +714,3 @@ describe("RoomCalendar – Check-in der laufenden eigenen Buchung", () => {
   });
 });
 
-describe("DayView – Check-in der laufenden eigenen Buchung", () => {
-  /** Zeiten relativ zur realen Uhrzeit (siehe RoomCalendar-Block). */
-  function laufendeZeiten(): { start: string; end: string } {
-    const jetzt = Date.now();
-    return {
-      start: new Date(jetzt - 3 * 60_000).toISOString(),
-      end: new Date(jetzt + 57 * 60_000).toISOString(),
-    };
-  }
-
-  function alsNutzer(email: string): void {
-    window.localStorage.setItem("timeless.currentUser", email);
-  }
-
-  afterEach(() => {
-    window.localStorage.removeItem("timeless.currentUser");
-  });
-
-  it("zeigt den Button an der laufenden eigenen Buchung, checkt ein und lädt NUR die betroffene Raumspur neu", async () => {
-    const user = userEvent.setup();
-    alsNutzer("mitarbeiter@example.com");
-    const listeRaum1: MockBuchung[] = [
-      {
-        id: 141,
-        roomId: 1,
-        createdBy: "mitarbeiter@example.com",
-        startsAt: laufendeZeiten().start,
-        endsAt: laufendeZeiten().end,
-        status: "bestaetigt",
-      },
-    ];
-    const mock = installBackend({
-      // Per Referenz: Der Check-in-Handler mutiert denselben Eintrag, den
-      // der Buchungslisten-Mock bei jedem GET erneut ausliest.
-      buchungenJeRaum: { 1: listeRaum1, 2: [] },
-      onCheckIn: (id) => {
-        const eintrag = listeRaum1.find((b) => b.id === id)!;
-        eintrag.status = "eingecheckt";
-        return jsonResponse(eintrag, 200);
-      },
-    });
-
-    renderAt("/day/7");
-    await screen.findByTestId("timegrid-lane-title-1");
-
-    const button = within(screen.getByTestId("timegrid-lane-1")).getByTestId(
-      "timegrid-checkin-141"
-    );
-    await user.click(button);
-
-    await waitFor(() => {
-      expect(
-        within(screen.getByTestId("timegrid-lane-1")).queryByTestId(
-          "timegrid-checkin-141"
-        )
-      ).not.toBeInTheDocument();
-    });
-    expect(within(screen.getByTestId("timegrid-lane-1")).getAllByText("Eingecheckt")).toHaveLength(1);
-    expect(
-      within(screen.getByTestId("timegrid-lane-2")).queryByText("Eingecheckt")
-    ).not.toBeInTheDocument();
-
-    // Gezielter Refetch: Nur Raum 1 wurde nach dem Check-in erneut angefragt.
-    const abrufeRaum1 = mock.mock.calls.filter(
-      (aufruf: [RequestInfo | URL]) =>
-        apiUrl(aufruf[0]).startsWith("/api/bookings?roomId=1")
-    );
-    expect(abrufeRaum1.length).toBeGreaterThanOrEqual(2);
-  });
-});

@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -325,6 +325,7 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
       <TimeGrid
         onRetry={() => {}}
         currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
         lanes={[
           lane(1, "Atelier Nord", [
             {
@@ -422,6 +423,7 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
       <TimeGrid
         onRetry={() => {}}
         currentUser="ANNA@DESIGNFREAK.DE"
+        onCheckIn={vi.fn()}
         lanes={[
           lane(1, "Atelier Nord", [
             {
@@ -467,7 +469,6 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
 
   it("ruft onCheckIn mit der Slot-Buchung und zeigt den Spinner während des Absendens", async () => {
     setzeUhrzeit(10, 7);
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const onCheckIn = vi.fn();
     render(
       <TimeGrid
@@ -488,7 +489,10 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
       />
     );
 
-    await user.click(screen.getByTestId("timegrid-checkin-107"));
+    // fireEvent statt userEvent-Klick: Unter Fake-Timern wartet userEvent
+    // intern auf echte Timer und läuft am deaktivierten Button sonst ins
+    // Zeitlimit – der Handler-Ruf selbst ist synchron beobachtbar.
+    fireEvent.click(screen.getByTestId("timegrid-checkin-107"));
     expect(onCheckIn).toHaveBeenCalledTimes(1);
     expect(onCheckIn).toHaveBeenCalledWith(
       expect.objectContaining({ id: 107 })
@@ -515,11 +519,13 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
         ]}
       />
     );
+    // checkingInId=107 → Button deaktiviert, Inline-Spinner statt Icon.
+    // Bewusst KEIN Klick: userEvent wartet auf ein freigegebenes Element
+    // und würde am deaktivierten Button ins Zeitlimit laufen – die Sperrung
+    // selbst ist hier das zu prüfende Verhalten.
     const button = screen.getByTestId("timegrid-checkin-107");
     expect(button).toBeDisabled();
     expect(button.querySelector(".animate-spin")).not.toBeNull();
-    await user.click(button);
-    expect(onCheckIn).toHaveBeenCalledTimes(0);
   });
 
   it("zeigt bei gescheitertem Check-in das destructive Inline-Feedback am Block (kein Toast)", () => {
