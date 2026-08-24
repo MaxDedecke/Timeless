@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkInBooking,
   createBooking,
   listBookingsForRoom,
   type Booking,
@@ -99,6 +100,54 @@ describe("bookings API-Client", () => {
     });
   });
 
+  it("checkInBooking ruft POST /api/bookings/:id/check-in ohne Body auf", async () => {
+    const eingecheckt: Booking = { ...sampleBooking, status: "eingecheckt" };
+    fetchMock.mockResolvedValueOnce(jsonResponse(eingecheckt, 200));
+
+    const ergebnis = await checkInBooking(42);
+
+    // Genau der Endpunkt aus Commit b6705376 – Methode POST, kein JSON-Body
+    // (der Backend-Handler liest keine Felder aus dem Request).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/bookings/42/check-in");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(ergebnis).toEqual(eingecheckt);
+  });
+
+  it("checkInBooking lehnt mit ApiError ab, wenn die Buchung nicht läuft (409)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error:
+            "Die Buchung läuft derzeit nicht – ein Check-in ist nur während des gebuchten Zeitraums möglich.",
+        },
+        409
+      )
+    );
+
+    await expect(checkInBooking(42)).rejects.toMatchObject({
+      name: "ApiError",
+      status: 409,
+      message:
+        "Die Buchung läuft derzeit nicht – ein Check-in ist nur während des gebuchten Zeitraums möglich.",
+    });
+  });
+
+  it("checkInBooking lehnt mit ApiError ab, wenn die Buchung unbekannt ist (404)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: "Buchung nicht gefunden." }, 404)
+    );
+
+    await expect(checkInBooking(999999)).rejects.toMatchObject({
+      name: "ApiError",
+      status: 404,
+      message: "Buchung nicht gefunden.",
+    });
+  });
+
   it("alle Requests verwenden ausschließlich relative /api-Pfade", async () => {
     fetchMock.mockResolvedValue(jsonResponse([sampleBooking]));
 
@@ -110,6 +159,7 @@ describe("bookings API-Client", () => {
       endsAt: "2026-08-25T10:30:00Z",
       createdBy: "mitarbeiter@example.com",
     });
+    await checkInBooking(42);
 
     for (const url of fetchMock.mock.calls.map(([u]) => String(u))) {
       expect(url.startsWith("/api/")).toBe(true);

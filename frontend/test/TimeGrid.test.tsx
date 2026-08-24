@@ -297,3 +297,303 @@ describe("TimeGrid – Zustände", () => {
     expect(screen.getByTestId("timegrid-grid")).toBeInTheDocument();
   });
 });
+
+describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
+  /** Heutiges Datum als „YYYY-MM-DD“ (UTC), wie die Ansichten es wählen. */
+  const heute = (): string => new Date().toISOString().slice(0, 10);
+
+  /**
+   * Legt die Systemuhrzeit auf „heute HH:mm“ UTC – so liegen die
+   * Testbuchungen garantiert im dargestellten Tag und der Lauf-Zustand
+   * ist deterministisch.
+   */
+  function setzeUhrzeit(stunde: number, minute: number): void {
+    vi.useFakeTimers();
+    vi.setSystemTime(
+      new Date(`${heute()}T${String(stunde).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00Z`)
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("zeigt den Check-in-Button an der laufenden eigenen bestätigten Buchung", () => {
+    setzeUhrzeit(10, 30);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 101,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    const slot = screen.getByTestId("timegrid-slot-booked");
+    expect(within(slot).getByTestId("timegrid-checkin-101")).toHaveTextContent(
+      "Check-in"
+    );
+  });
+
+  it("zeigt keinen Check-in bei fremder Buchung", () => {
+    setzeUhrzeit(10, 30);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="ben@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 102,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+
+  it("zeigt keinen Check-in ohne bekannten Urheber (alter Datenstand)", () => {
+    setzeUhrzeit(10, 30);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 103,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+
+  it("zeigt keinen Check-in vor Beginn der Buchung", () => {
+    setzeUhrzeit(9, 59);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 104,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "Anna@DesignFreak.DE",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+
+  it("vergleicht den Urheber groß-/kleinungsunabhängig", () => {
+    setzeUhrzeit(10, 30);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="ANNA@DESIGNFREAK.DE"
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 105,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "Anna@DesignFreak.DE",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId("timegrid-checkin-105")).toBeInTheDocument();
+  });
+
+  it("endet das Fenster nach Ablauf der No-Show-Frist (Beginn + X Minuten) – auch wenn die Buchung noch läuft", () => {
+    // Frist X = 15 Minuten (NO_SHOW_GRACE_MINUTES): um 10:16 ist Schluss,
+    // obwohl die Buchung bis 11:00 läuft.
+    setzeUhrzeit(10, 16);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 106,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+
+  it("ruft onCheckIn mit der Slot-Buchung und zeigt den Spinner während des Absendens", async () => {
+    setzeUhrzeit(10, 30);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onCheckIn = vi.fn();
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={onCheckIn}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 107,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    await user.click(screen.getByTestId("timegrid-checkin-107"));
+    expect(onCheckIn).toHaveBeenCalledTimes(1);
+    expect(onCheckIn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 107 })
+    );
+
+    // checkingInId=107 → Button deaktiviert, Inline-Spinner statt Icon.
+    cleanup();
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        checkingInId={107}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 107,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+    const button = screen.getByTestId("timegrid-checkin-107");
+    expect(button).toBeDisabled();
+    expect(button.querySelector(".animate-spin")).not.toBeNull();
+    await user.click(button);
+    expect(onCheckIn).toHaveBeenCalledTimes(0);
+  });
+
+  it("zeigt bei gescheitertem Check-in das destructive Inline-Feedback am Block (kein Toast)", () => {
+    setzeUhrzeit(10, 30);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        checkInFehler={{ bookingId: 108, message: "läuft nicht mehr" }}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 108,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    // Adressierbarer Fehler inline am Block (Konzept „Fehleranzeige“),
+    // nicht als Toast – der Button bleibt bedienbar für einen zweiten Versuch.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Check-in fehlgeschlagen: läuft nicht mehr"
+    );
+    expect(screen.getByTestId("timegrid-checkin-108")).toBeEnabled();
+
+    // Ein Fehler zu einer ANDEREN Buchung erscheint hier nicht.
+    cleanup();
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        checkInFehler={{ bookingId: 999, message: "egal" }}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 108,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("zeigt keinen Check-in ohne übergebenen Handler (reine Ansichtsnutzung bleibt möglich)", () => {
+    setzeUhrzeit(10, 30);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 109,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+});

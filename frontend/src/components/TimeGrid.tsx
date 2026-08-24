@@ -3,7 +3,6 @@ import {
   CalendarX,
   Check,
   Inbox,
-  LoaderCircle,
   RotateCw,
 } from "lucide-react";
 
@@ -62,12 +61,57 @@ export interface TimeGridBooking {
    * gilt die Buchung nicht als eigene und bekommt keinen Check-in.
    */
   createdBy?: string;
+  /**
+   * Raum-ID der Buchung (API-Feld `roomId`) – erlaubt der Tagesansicht, nach
+   * einem Check-in gezielt nur die Belegung dieses Raums neu zu laden, statt
+   * die ganze Ansicht ins Skeleton zu werfen.
+   */
+  roomId?: number;
   /** Wird vor dem Absenden des Check-ins gesetzt: Spinner statt Icon. */
   checkingIn?: boolean;
 }
 
 /** Rückruf je Spur-Buchung – im TimeGrid als reine Ansichtskomponente. */
 export type TimeGridCheckInHandler = (booking: TimeGridBooking) => void;
+
+/**
+ * Sichtbarkeitsfenster der Check-in-Aktion (Konzept „Check-in & No-Show"):
+ * [Beginn, min(Beginn + X Minuten, Ende)) – und zwar nur für bestätigte
+ * Buchungen, die noch nicht eingecheckt sind.
+ *
+ * „Laufend“ ist hier bewusst weiter gefasst als im Backend-Endpunkt
+ * (`Start <= jetzt < Ende`): Innerhalb der Frist, aber nach dem Ende, zeigt
+ * die Ansicht den Button weiterhin – wer zu spät kommt, soll nicht mit einer
+ * toten Oberfläche allein gelassen werden, sondern erhält beim Absenden die
+ * verständliche Backend-Ablehnung (HTTP 409) als Inline-Fehler. Die Frist X
+ * bleibt bis zur Konfigurations-API hier an zentraler Stelle hinterlegt.
+ */
+export function checkInFenster(
+  booking: Pick<TimeGridBooking, "start" | "end" | "status">
+): { von: Date; bis: Date } | null {
+  if (booking.status !== "bestaetigt") return null;
+  const start = new Date(booking.start);
+  const end = new Date(booking.end);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const fristEndeMs = Math.min(
+    start.getTime() + NO_SHOW_GRACE_MINUTES * 60 * 1000,
+    end.getTime()
+  );
+  return { von: start, bis: new Date(fristEndeMs) };
+}
+
+/** Prüft, ob `jetzt` im Check-in-Fenster der Buchung liegt. */
+export function checkInMoeglich(
+  booking: Pick<TimeGridBooking, "start" | "end" | "status">,
+  jetzt: Date = new Date()
+): boolean {
+  const fenster = checkInFenster(booking);
+  return (
+    fenster !== null &&
+    fenster.von.getTime() <= jetzt.getTime() &&
+    jetzt < fenster.bis
+  );
+}
 
 /** Eine Spur ist typisch ein Raum: Titel plus seine Buchungen des Tags. */
 export interface TimeGridLane {
@@ -247,18 +291,63 @@ function FreeSlot({ slot }: FreeSlotProps) {
   );
 }
 
+/**
+ * Urheber-Vergleich ohne Rücksicht auf Groß-/Kleinschreibung und umgebende
+ * Leerraum-Zeichen – E-Mail-Eingaben im Buchungsformular sind freier Text,
+ * die Ansicht soll „Anna@Example.de" nicht von „anna@example.de" trennen.
+ */
+function createdByGleich(a?: string, b?: string): boolean {
+  if (a === undefined || b === undefined) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/** Fehlerzustand eines Check-ins, je Buchung (Schlüssel: Slot-ID). */
+export interface CheckInFehler {
+  bookingId: number | string;
+  message: string;
+}
+
 interface BookedSlotProps {
   slot: TimeGridSlot;
+  /** Urheber der angemeldeten Person – Grundlage der „eigene"-Regel. */
+  currentUser?: string;
+  /** Wird beim Klick auf „Check-in" mit der Slot-Buchung gerufen. */
+  onCheckIn?: TimeGridCheckInHandler;
+  /** ID der Buchung, deren Check-in gerade läuft (Spinner statt Icon). */
+  checkingInId?: number | string | null;
+  /** Gescheiterter Check-in dieser Buchung → destructives Inline-Feedback. */
+  checkInFehler?: CheckInFehler | null;
 }
 
 /**
  * Belegtes Fenster: Primary-Tönung, formatierte Zeiten (lib/format) und
- * Status-Badge. Mit unlesbaren Zeitangaben bleibt der Block als solcher
- * erkennbar (destructiver Punkt, Hinweistext), statt still zu verschwinden.
+ * Status-Badge; eigene laufende Buchungen erhalten rechts daneben die
+ * Check-in-Aktion (Konzept „Check-in & No-Show": Button `size="sm"` mit
+ * Check-Icon und Beschriftung, auf schmalen Breiten mindestens h-11). Mit
+ * unlesbaren Zeitangaben bleibt der Block als solcher erkennbar
+ * (destructiver Punkt, Hinweistext), statt still zu verschwinden.
  */
-function BookedSlot({ slot }: BookedSlotProps) {
+function BookedSlot({
+  slot,
+  currentUser,
+  onCheckIn,
+  checkingInId,
+  checkInFehler,
+}: BookedSlotProps) {
   const booking = slot.booking as TimeGridBooking;
   const placeholder = slot.placeholder === true;
+  const pruefbar =
+    !placeholder &&
+    currentUser !== undefined &&
+    currentUser !== "" &&
+    createdByGleich(booking.createdBy, currentUser);
+  const kannEinchecken =
+    pruefbar &&
+    booking.id !== undefined &&
+    checkInMoeglich(booking, new Date()) &&
+    onCheckIn !== undefined;
+  const laeuft = checkingInId === booking.id;
+
   return (
     <div
       data-testid="timegrid-slot-booked"
@@ -266,7 +355,7 @@ function BookedSlot({ slot }: BookedSlotProps) {
         "flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md bg-primary-tint px-3 py-2 ring-1 ring-inset ring-primary/30",
         !placeholder && HOUR_HEIGHT_CLASS
       )}
-      style={{ height: heightStyle(slot) }}
+      style={{ height: placeholder ? undefined : heightStyle(slot) }}
     >
       <span className="flex min-w-0 items-center gap-2">
         <span
@@ -287,7 +376,41 @@ function BookedSlot({ slot }: BookedSlotProps) {
         )}
         <span className="sr-only">belegt</span>
       </span>
-      <BookingStatusBadge status={booking.status ?? "bestaetigt"} />
+      <span className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        {/* Fehler zuerst: Der Nutzer muss den Fall adressieren (Konzept:
+            kein Toast für adressierbare Fehler), der Button bleibt
+            bedienbar – der nächste Versuch entfernt die Meldung. */}
+        {kannEinchecken && checkInFehler?.bookingId === booking.id && (
+          <span
+            role="alert"
+            data-testid={`timegrid-checkin-error-${booking.id}`}
+            className="w-full text-right text-xs text-destructive"
+          >
+            Check-in fehlgeschlagen: {checkInFehler.message}
+          </span>
+        )}
+        <BookingStatusBadge status={booking.status ?? "bestaetigt"} />
+        {kannEinchecken && (
+          <Button
+            type="button"
+            size="sm"
+            disabled={laeuft}
+            onClick={() => onCheckIn?.(booking)}
+            data-testid={`timegrid-checkin-${booking.id}`}
+            className={cn("min-h-11 sm:min-h-9", "px-3")}
+          >
+            {laeuft ? (
+              <span
+                className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+                aria-hidden="true"
+              />
+            ) : (
+              <Check className="h-4 w-4" aria-hidden="true" />
+            )}
+            Check-in
+          </Button>
+        )}
+      </span>
     </div>
   );
 }
@@ -303,10 +426,20 @@ function heightStyle(slot: TimeGridSlot): string {
 
 interface LaneColumnProps {
   lane: TimeGridLane;
+  currentUser?: string;
+  onCheckIn?: TimeGridCheckInHandler;
+  checkingInId?: number | string | null;
+  checkInFehler?: CheckInFehler | null;
 }
 
 /** Eine Spur als Card mit ihren Slots untereinander (mobil wie Desktop). */
-function LaneColumn({ lane }: LaneColumnProps) {
+function LaneColumn({
+  lane,
+  currentUser,
+  onCheckIn,
+  checkingInId,
+  checkInFehler,
+}: LaneColumnProps) {
   const slots = buildSlots(lane.bookings);
   return (
     <Card data-testid={`timegrid-lane-${lane.id}`}>
@@ -321,7 +454,14 @@ function LaneColumn({ lane }: LaneColumnProps) {
       <CardContent className="flex flex-col gap-1 pt-0">
         {slots.map((slot, index) =>
           slot.kind === "booking" ? (
-            <BookedSlot key={index} slot={slot} />
+            <BookedSlot
+              key={index}
+              slot={slot}
+              currentUser={currentUser}
+              onCheckIn={onCheckIn}
+              checkingInId={checkingInId}
+              checkInFehler={checkInFehler}
+            />
           ) : (
             <FreeSlot key={index} slot={slot} />
           )
@@ -457,19 +597,36 @@ export interface TimeGridProps {
   error?: boolean;
   /** Wird vom „Erneut versuchen"-Button bzw. „Neu laden" ausgelöst. */
   onRetry: () => void;
+  /**
+   * Urheber der angemeldeten Person (bis zur SSO-Klärung als Text, z. B.
+   * E-Mail aus dem localStorage): Nur eigene Buchungen zeigen den Check-in.
+   */
+  currentUser?: string;
+  /** Absenden des Check-ins – die Ansicht führt die API-Anfrage aus. */
+  onCheckIn?: TimeGridCheckInHandler;
+  /** ID der Buchung mit laufendem Check-in (Spinner statt Icon). */
+  checkingInId?: number | string | null;
+  /** Gescheiterter Check-in als destructives Inline-Feedback am Block. */
+  checkInFehler?: CheckInFehler | null;
 }
 
 /**
  * Gemeinsames Zeitraster für Raumkalender (eine Spur) und Tagesansicht
  * (eine Spur je Raum). Reine Darstellungskomponente: Sie lädt selbst nichts
  * und kennt keinen API-Pfad – Zustand (lädt/Fehler) kommt als Props herein,
- * das Nachladen stößt die aufrufende Ansicht über onRetry neu an.
+ * das Nachladen stößt die aufrufende Ansicht über onRetry neu an. Die
+ * Check-in-Regeln und der Button liegen hier einmal zentral (Konzept),
+ * sodass Raumkalender und Tagesansicht das Verhalten automatisch teilen.
  */
 export default function TimeGrid({
   lanes,
   isLoading = false,
   error = false,
   onRetry,
+  currentUser,
+  onCheckIn,
+  checkingInId = null,
+  checkInFehler = null,
 }: TimeGridProps) {
   if (isLoading) {
     return <TimeGridLoading lanesCount={Math.max(lanes.length, 1)} />;
@@ -491,7 +648,14 @@ export default function TimeGrid({
         className={gridClass()}
       >
         {lanes.map((lane) => (
-          <LaneColumn key={lane.id} lane={lane} />
+          <LaneColumn
+            key={lane.id}
+            lane={lane}
+            currentUser={currentUser}
+            onCheckIn={onCheckIn}
+            checkingInId={checkingInId}
+            checkInFehler={checkInFehler}
+          />
         ))}
       </div>
     </section>

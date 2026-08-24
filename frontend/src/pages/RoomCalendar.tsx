@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import BookingForm from "./BookingForm";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -12,10 +13,18 @@ import {
 } from "lucide-react";
 
 import { ApiError } from "../api/http";
-import { listBookingsForRoom, type Booking } from "../api/bookings";
+import {
+  checkInBooking,
+  listBookingsForRoom,
+  type Booking,
+} from "../api/bookings";
 import { getRoom, type Room } from "../api/rooms";
-import TimeGrid, { type TimeGridLane } from "../components/TimeGrid";
+import TimeGrid, {
+  type CheckInFehler,
+  type TimeGridLane,
+} from "../components/TimeGrid";
 import { formatDate } from "../lib/format";
+import { getCurrentUser } from "../lib/currentUser";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -34,7 +43,12 @@ import { Button } from "../components/ui/button";
  * läuft gegen die bestehende Anlegen-API inklusive Konfliktprüfung (409
  * erscheint im Dialog als verständliches Alert), bei Erfolg schließt der
  * Dialog und die Buchungsliste wird neu geladen, sodass die neue Buchung
- * unmittelbar im Zeitgitter steht.
+ * unmittelbar im Zeitgitter steht. Die laufende, eigene Buchung erhält
+ * außerdem den Check-in-Button aus dem gemeinsamen TimeGrid (Anforderung 1):
+ * Nach erfolgreichem Check-in erscheint ein Erfolgs-Toast, das Badge wechselt
+ * über den Refetch auf „Eingecheckt", der Button entfällt; ein Fehlschlag –
+ * etwa eine zwischenzeitlich abgelaufene No-Show-Frist (409) – erscheint als
+ * destructives Inline-Feedback am Buchungsblock und die Ansicht lädt nach.
  */
 
 /** Heutiges Datum als „YYYY-MM-DD" (UTC) – Default des Datumswechslers. */
@@ -187,6 +201,14 @@ export default function RoomCalendar() {
   const [buchungen, setBuchungen] = useState<Booking[]>([]);
   const [reloadTick, setReloadTick] = useState(0);
 
+  /** ID der Buchung mit laufendem Check-in (Spinner am Button). */
+  const [checkingInId, setCheckingInId] = useState<number | string | null>(
+    null
+  );
+  /** Gescheiterter Check-in → destructives Inline-Feedback am Buchungsblock. */
+  const [checkInFehler, setCheckInFehler] =
+    useState<CheckInFehler | null>(null);
+
   const ladeAlles = useCallback(async (signal: AbortSignal) => {
     if (!raumIdGueltig) {
       setLoadState({ phase: "error", message: "Raum nicht gefunden." });
@@ -266,6 +288,46 @@ export default function RoomCalendar() {
     }
   }, [parsedId, raumIdGueltig]);
 
+  /**
+   * Check-in der laufenden, eigenen Buchung (Anforderung 1): Absenden gegen
+   * POST /api/bookings/:id/check-in. Erfolg → Toast (Konzept „Toast nur für
+   * transiente Erfolge“) und Refetch der Liste, sodass das Badge sofort auf
+   * „Eingecheckt" wechselt und der Button entfällt. Fehlschlag (etwa
+   * abgelaufene No-Show-Frist → 409) → destructives Inline-Feedback am
+   * Buchungsblock statt Toast – der Nutzer muss den Fall adressieren; die
+   * Ansicht lädt anschließend ihren Stand nach, falls sich zwischenzeitlich
+   * etwas am Beleg geändert hat. Ein Fehler des Nachladens bleibt bewusst
+   * still: Der eingecheckte Stand ist im Server-System ohnehin gültig, der
+   * nächste Neulade-Vorgang der Ansicht holt ihn.
+   */
+  const checkInAusloesen = useCallback(
+    async (slotBuchung: { id: number | string }) => {
+      const id = Number(slotBuchung.id);
+      if (!Number.isInteger(id) || checkingInId !== null) return;
+      setCheckInFehler(null);
+      setCheckingInId(id);
+      try {
+        await checkInBooking(id);
+        toast.success("Check-in erfasst");
+        await buchungenNeuLaden();
+      } catch (err) {
+        setCheckInFehler({
+          bookingId: slotBuchung.id,
+          message:
+            err instanceof ApiError
+              ? err.message
+              : "Der Server ist momentan nicht erreichbar oder meldet einen Fehler.",
+        });
+        void buchungenNeuLaden();
+      } finally {
+        setCheckingInId(null);
+      }
+    },
+    [buchungenNeuLaden, checkingInId]
+  );
+
+  const aktuellerNutzer = useMemo(() => getCurrentUser(), []);
+
   const spur: TimeGridLane | null = useMemo(() => {
     if (loadState.phase !== "ready") return null;
     return {
@@ -276,6 +338,10 @@ export default function RoomCalendar() {
         start: buchung.startsAt,
         end: buchung.endsAt,
         status: buchung.status,
+        // Urheber und Raum für die Check-in-Regel („nur eigene, laufende
+        // Buchung“) bzw. das gezielte Nachladen in der Tagesansicht.
+        createdBy: buchung.createdBy,
+        roomId: buchung.roomId,
       })),
     };
   }, [loadState, buchungen, datum]);
@@ -331,6 +397,10 @@ export default function RoomCalendar() {
             isLoading={loadState.phase === "loading"}
             error={false}
             onRetry={nochmalLaden}
+            currentUser={aktuellerNutzer ?? undefined}
+            onCheckIn={(slotBuchung) => void checkInAusloesen(slotBuchung)}
+            checkingInId={checkingInId}
+            checkInFehler={checkInFehler}
           />
           {loadState.phase === "ready" && (
             <BookingForm

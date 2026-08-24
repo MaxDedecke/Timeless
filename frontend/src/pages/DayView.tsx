@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -9,14 +10,20 @@ import {
   RotateCw,
 } from "lucide-react";
 
+import { ApiError } from "../api/http";
 import {
+  checkInBooking,
   listBookingsForRoom,
   type Booking,
 } from "../api/bookings";
 import { listLocations, type Location } from "../api/locations";
 import { listRooms, type Room } from "../api/rooms";
-import TimeGrid, { type TimeGridLane } from "../components/TimeGrid";
+import TimeGrid, {
+  type CheckInFehler,
+  type TimeGridLane,
+} from "../components/TimeGrid";
 import { formatDate } from "../lib/format";
+import { getCurrentUser } from "../lib/currentUser";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -36,6 +43,11 @@ import { Card } from "../components/ui/card";
  * der Standortwechsel läuft ebenso über Links, nie über ein natives
  * Auswahlfeld. Alle Fetches laufen relativ über /api (Reverse-Proxy, kein
  * Servicename im Browser-Code); Datum formatiert ausschließlich lib/format.
+ *
+ * Check-in (Anforderung 1): Auch hier zeigt das gemeinsame TimeGrid die
+ * Aktion an der laufenden, eigenen Buchung. Nach Erfolg erscheint der
+ * Erfolgs-Toast und NUR die betroffene Raumspur lädt ihre Belegung neu –
+ * die übrigen Räume und der Ladezustand der Gesamtansicht bleiben unberührt.
  */
 
 /** Heutiges Datum als „YYYY-MM-DD" (UTC) – Default des Datumswechslers. */
@@ -142,6 +154,14 @@ export default function DayView() {
   const [belegung, setBelegung] = useState<Record<number, Booking[]>>({});
   const [reloadTick, setReloadTick] = useState(0);
 
+  /** ID der Buchung mit laufendem Check-in (Spinner am Button). */
+  const [checkingInId, setCheckingInId] = useState<number | string | null>(
+    null
+  );
+  /** Gescheiterter Check-in → destructives Inline-Feedback am Buchungsblock. */
+  const [checkInFehler, setCheckInFehler] =
+    useState<CheckInFehler | null>(null);
+
   /**
    * Eine einzige Ladeschleife für Standorte/Räume UND Belegung: Sie läuft
    * beim ersten Laden, nach „Erneut versuchen" und bei jedem Datumswechsel.
@@ -235,6 +255,71 @@ export default function DayView() {
   }, []);
 
   /**
+   * Belegung EINES Raums nachladen – Grundlage des gezielten Refetchs nach
+   * einem Check-in: Nur die betroffene Spur frischt sich auf, die übrigen
+   * Räume und der Ladezustand der Gesamtansicht bleiben unberührt.
+   */
+  const belegungEinesRaumsNeuLaden = useCallback(
+    async (raumId: number): Promise<Booking[] | null> => {
+      try {
+        const liste = await listBookingsForRoom(raumId, datum);
+        setBelegung((vorher) => ({ ...vorher, [raumId]: liste }));
+        return liste;
+      } catch {
+        // Still wie im Raumkalender: Der eingecheckte Stand ist serverseitig
+        // gültig; der nächste Neulade-Vorgang (Datumswechsel, Aktualisieren)
+        // holt ihn.
+        return null;
+      }
+    },
+    [datum]
+  );
+
+  /**
+   * Check-in der laufenden, eigenen Buchung (Anforderung 1) – dieselbe
+   * Aktion wie im Raumkalender, wiederverwendet über das gemeinsame TimeGrid:
+   * Erfolg → Toast „Check-in erfasst“ und gezielter Refetch nur der
+   * betroffenen Raumspur; Fehlschlag → destructives Inline-Feedback am Block
+   * plus stiller Abgleich. In der Tagesansicht können mehrere eigene
+   * Buchungen gleichzeitig laufen (Konzept), deshalb schützt `checkingInId`
+   * vor Doppelklicks auf denselben Vorgang.
+   */
+  const checkInAusloesen = useCallback(
+    async (slotBuchung: { id: number | string; roomId?: number }) => {
+      const id = Number(slotBuchung.id);
+      if (!Number.isInteger(id) || checkingInId !== null) return;
+      setCheckInFehler(null);
+      setCheckingInId(id);
+      try {
+        await checkInBooking(id);
+        toast.success("Check-in erfasst");
+        if (slotBuchung.roomId !== undefined && Number.isInteger(slotBuchung.roomId)) {
+          await belegungEinesRaumsNeuLaden(slotBuchung.roomId);
+        }
+      } catch (err) {
+        setCheckInFehler({
+          bookingId: slotBuchung.id,
+          message:
+            err instanceof ApiError
+              ? err.message
+              : "Der Server ist momentan nicht erreichbar oder meldet einen Fehler.",
+        });
+        if (
+          slotBuchung.roomId !== undefined &&
+          Number.isInteger(slotBuchung.roomId)
+        ) {
+          void belegungEinesRaumsNeuLaden(slotBuchung.roomId);
+        }
+      } finally {
+        setCheckingInId(null);
+      }
+    },
+    [belegungEinesRaumsNeuLaden, checkingInId]
+  );
+
+  const aktuellerNutzer = useMemo(() => getCurrentUser(), []);
+
+  /**
    * Tageswechsel: Nur der Suchparameter ändert sich – Pfad und damit die
    * geladenen Räume bleiben stehen, es läuft kein erneuter Request.
    */
@@ -257,6 +342,10 @@ export default function DayView() {
         start: buchung.startsAt,
         end: buchung.endsAt,
         status: buchung.status,
+        // Urheber und Raum für die Check-in-Regel („nur eigene, laufende
+        // Buchung“) bzw. den gezielten Refetch der betroffenen Spur.
+        createdBy: buchung.createdBy,
+        roomId: buchung.roomId,
       })),
     }));
   }, [state, belegung]);
@@ -364,6 +453,10 @@ export default function DayView() {
           isLoading={state.phase === "loading"}
           error={false}
           onRetry={nochmalLaden}
+          currentUser={aktuellerNutzer ?? undefined}
+          onCheckIn={(slotBuchung) => void checkInAusloesen(slotBuchung)}
+          checkingInId={checkingInId}
+          checkInFehler={checkInFehler}
         />
       )}
     </section>
