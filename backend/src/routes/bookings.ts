@@ -6,6 +6,7 @@ import {
 } from "../services/errors.js";
 import {
   BookingInput,
+  checkIn,
   createBooking,
   listBookingsForRoom,
 } from "../services/bookings.js";
@@ -53,6 +54,22 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
     next(err);
   }
 });
+
+// POST /api/bookings/:id/check-in – Check-in der aktuell laufenden Buchung
+// (Anforderung 2). Die Pflichtfeld- und Zeitraumprüfung liegt im Service:
+// Erfolg liefert die aktualisierte Buchung mit Status 'eingecheckt' (200),
+// ein bereits eingecheckter Zweitversuch ist idempotent (ebenfalls 200),
+// nicht laufend oder falscher Status führt zu 409, unbekannte ID zu 404.
+router.post(
+  "/:id(\\d+)/check-in",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.status(200).json(await checkIn(Number(req.params.id)));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // Fehlerbehandlung dieses Routers: Fachfehler werden zu verständlichen
 // Statuscodes, alles andere bleibt ein Serverfehler (Express-Default, 500).

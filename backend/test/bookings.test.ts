@@ -5,10 +5,15 @@ import app from "../src/server.js";
 import { __restorePoolForTests, __setPoolForTests } from "../src/db.js";
 import { InMemoryDb } from "./helpers/in-memory-db.js";
 import {
+  checkIn,
   createBooking,
   findOverlappingBookings,
 } from "../src/services/bookings.js";
-import { ConflictError, ValidationError } from "../src/services/errors.js";
+import {
+  ConflictError,
+  DomainNotFoundError,
+  ValidationError,
+} from "../src/services/errors.js";
 
 // ---------------------------------------------------------------------------
 // Aufbau: Eine In-Memory-Postgres mit dem echten Migrationsschema für die
@@ -75,6 +80,35 @@ function bookingBody(roomId: number, startsAt: string, endsAt: string) {
     endsAt,
     createdBy: "mitarbeiter@example.com",
   };
+}
+
+/** Eine Minute in Millisekunden – für Zeiträume relativ zur aktuellen Zeit. */
+const MINUTE_MS = 60 * 1000;
+
+/** Legt eine bestätigte Buchung relativ zur aktuellen Zeit an (Check-in-Tests). */
+async function seedRunningBooking(
+  roomId: number,
+  startOffsetMs: number,
+  endOffsetMs: number
+): Promise<number> {
+  const now = Date.now();
+  const startsAt = new Date(now + startOffsetMs).toISOString();
+  const endsAt = new Date(now + endOffsetMs).toISOString();
+  const { rows } = await db.query<{ id: number }>(
+    "INSERT INTO bookings (room_id, created_by, starts_at, ends_at) " +
+      "VALUES ($1, 'laeuft@example.com', $2::timestamptz, $3::timestamptz) RETURNING id::int AS id",
+    [roomId, startsAt, endsAt]
+  );
+  return rows[0].id;
+}
+
+/** Status einer Buchung direkt aus der DB lesen (Sicherstellung unverändert). */
+async function bookingStatus(id: number): Promise<string> {
+  const { rows } = await db.query<{ status: string }>(
+    "SELECT status FROM bookings WHERE id = $1",
+    [id]
+  );
+  return rows[0]?.status ?? "";
 }
 
 // ---------------------------------------------------------------------------
@@ -384,4 +418,115 @@ test("createBooking wirft bei Konflikt einen ConflictError und bei ungültigen F
   // Beide Ablehnungen dürfen keine Spuren hinterlassen: weiterhin genau eine
   // Buchung in diesem Raum.
   assert.equal(await countBookings(roomId), 1);
+});
+
+// ---------------------------------------------------------------------------
+// Teil 3: Check-in der aktuell laufenden Buchung (Anforderung 2) – API und
+// Service-Ebene. „Laufend" heißt Start <= jetzt < Ende; die Arrangements
+// legen ihre Buchungen deshalb relativ zur aktuellen Zeit an.
+// ---------------------------------------------------------------------------
+
+test("POST /api/bookings/:id/check-in checkt eine laufende, bestätigte Buchung ein", async () => {
+  const roomId = await createTestRoom("Checkin Erfolg");
+  const id = await seedRunningBooking(roomId, -10 * MINUTE_MS, +30 * MINUTE_MS);
+
+  const res = await request(app).post(`/api/bookings/${id}/check-in`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.id, id);
+  assert.equal(res.body.status, "eingecheckt");
+  assert.equal(res.body.roomId, roomId);
+
+  // Auch in der Datenbank wirklich gesetzt, nicht nur in der Antwort.
+  assert.equal(await bookingStatus(id), "eingecheckt");
+});
+
+test("POST /api/bookings/:id/check-in ist bei bereits eingecheckter Buchung idempotent (200, Status bleibt)", async () => {
+  const roomId = await createTestRoom("Checkin Idempotent");
+  const id = await seedRunningBooking(roomId, -5 * MINUTE_MS, +20 * MINUTE_MS);
+
+  const first = await request(app).post(`/api/bookings/${id}/check-in`);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.status, "eingecheckt");
+
+  const second = await request(app).post(`/api/bookings/${id}/check-in`);
+  assert.equal(second.status, 200);
+  assert.equal(second.body.status, "eingecheckt");
+  assert.deepEqual(second.body, first.body);
+});
+
+test("POST /api/bookings/:id/check-in lehnt zukünftige Buchung mit 409 ab, Status bleibt unverändert", async () => {
+  const roomId = await createTestRoom("Checkin Zukunft");
+  const id = await seedRunningBooking(roomId, +15 * MINUTE_MS, +75 * MINUTE_MS);
+
+  const res = await request(app).post(`/api/bookings/${id}/check-in`);
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /läuft derzeit nicht/);
+  assert.equal(await bookingStatus(id), "bestaetigt");
+});
+
+test("POST /api/bookings/:id/check-in lehnt beendete Buchung mit 409 ab, Status bleibt unverändert", async () => {
+  const roomId = await createTestRoom("Checkin Vergangenheit");
+  const id = await seedRunningBooking(roomId, -90 * MINUTE_MS, -30 * MINUTE_MS);
+
+  const res = await request(app).post(`/api/bookings/${id}/check-in`);
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /läuft derzeit nicht/);
+  assert.equal(await bookingStatus(id), "bestaetigt");
+});
+
+test("POST /api/bookings/:id/check-in mit unbekannter ID liefert 404", async () => {
+  const res = await request(app).post("/api/bookings/99999999/check-in");
+  assert.equal(res.status, 404);
+  assert.match(res.body.error, /Buchung nicht gefunden/);
+});
+
+test("checkIn lehnt stornierte und als 'nicht erschienen' behandelte Buchungen mit ConflictError ab", async () => {
+  const roomId = await createTestRoom("Checkin Falscher Status");
+
+  const stornoId = await seedRunningBooking(
+    roomId,
+    -10 * MINUTE_MS,
+    +30 * MINUTE_MS
+  );
+  await db.query("UPDATE bookings SET status = 'storniert' WHERE id = $1", [
+    stornoId,
+  ]);
+  await assert.rejects(
+    () => checkIn(stornoId),
+    (err: unknown) => {
+      assert.ok(err instanceof ConflictError);
+      assert.match((err as Error).message, /Nur bestätigte/);
+      return true;
+    }
+  );
+
+  // Die No-Show-Freigabe (Anforderung 3, Sprint-Ziel) setzt diesen Status –
+  // auch solche Zeilen darf der Check-in nicht wiederbeleben.
+  const noShowId = await seedRunningBooking(
+    roomId,
+    -10 * MINUTE_MS,
+    +30 * MINUTE_MS
+  );
+  await db.query("UPDATE bookings SET status = 'nicht erschienen' WHERE id = $1", [
+    noShowId,
+  ]);
+  await assert.rejects(() => checkIn(noShowId), ConflictError);
+
+  const pendingId = await seedRunningBooking(
+    roomId,
+    -10 * MINUTE_MS,
+    +30 * MINUTE_MS
+  );
+  await db.query("UPDATE bookings SET status = 'ausstehend' WHERE id = $1", [
+    pendingId,
+  ]);
+  await assert.rejects(() => checkIn(pendingId), ConflictError);
+
+  for (const id of [stornoId, noShowId, pendingId]) {
+    assert.notEqual(await bookingStatus(id), "eingecheckt");
+  }
+});
+
+test("checkIn wirft für unbekannte ID einen DomainNotFoundError", async () => {
+  await assert.rejects(() => checkIn(42424242), DomainNotFoundError);
 });

@@ -7,7 +7,8 @@ import {
 } from "./errors.js";
 
 /**
- * Buchungen: anlegen mit Konfliktprüfung (Anforderung 1).
+ * Buchungen: anlegen mit Konfliktprüfung (Anforderung 1) und Check-in der
+ * aktuell laufenden Buchung (Anforderung 2).
  *
  * Der Urheber wird solange als Text geführt, bis die SSO-/Login-Klärung beim
  * Kunden abgeschlossen ist (siehe Migration 003). Den Status setzt die
@@ -269,4 +270,60 @@ export async function createBooking(input: BookingInput): Promise<Booking> {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Check-in der aktuell laufenden Buchung (Anforderung 2).
+ *
+ * „Laufend" heißt: `Start <= jetzt < Ende` – ein Check-in vor Beginn oder
+ * nach Ende wird mit ConflictError (HTTP 409) abgelehnt; eine nicht
+ * existierende Buchung mit DomainNotFoundError (HTTP 404). Nur bestätigte
+ * Buchungen checken ein – ausstehende, stornierte und bereits als „nicht
+ * erschienen" freigegebene bleiben draußen.
+ *
+ * Bereits eingecheckt ist kein Fehler, sondern idempotent: Die Buchung wird
+ * unverändert zurückgegeben, damit ein zweiter Klick bzw. wiederholtes
+ * Absenden den Status nicht verschlechtern kann.
+ *
+ * `now` ist bewusst injizierbar (Default `new Date()`): Tests legen laufende
+ * Buchungen relativ zur aktuellen Zeit an und die spätere No-Show-Freigabe
+ * (Anforderung 1) prüft dieselbe Lauf-Bedingung gegen denselben Parameter.
+ */
+export async function checkIn(
+  bookingId: number,
+  now: Date = new Date()
+): Promise<Booking> {
+  const { rows } = await pool.query(`${BOOKING_SELECT} WHERE id = $1`, [
+    bookingId,
+  ]);
+  if (rows.length === 0) {
+    throw new DomainNotFoundError("Buchung nicht gefunden.");
+  }
+  const booking = toBooking(rows[0] as BookingRow);
+
+  if (booking.status === "eingecheckt") {
+    return booking;
+  }
+
+  const startsAt = new Date(booking.startsAt);
+  const endsAt = new Date(booking.endsAt);
+  if (booking.status !== "bestaetigt") {
+    throw new ConflictError(
+      "Nur bestätigte Buchungen können eingecheckt werden."
+    );
+  }
+  const running = startsAt.getTime() <= now.getTime() && now < endsAt;
+  if (!running) {
+    throw new ConflictError(
+      "Die Buchung läuft derzeit nicht – ein Check-in ist nur während des gebuchten Zeitraums möglich."
+    );
+  }
+
+  // Platzhalter je gebundenem Wert ($n), damit echte Postgres die Abfrage
+  // binden kann – Literale statt Platzhalter brechen dort mit Bind-Fehler.
+  await pool.query(`UPDATE bookings SET status = 'eingecheckt' WHERE id = $1`, [
+    bookingId,
+  ]);
+
+  return { ...booking, status: "eingecheckt" };
 }
