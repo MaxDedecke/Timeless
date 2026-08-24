@@ -344,6 +344,13 @@ interface BookedSlotProps {
  * Check-Icon und Beschriftung, auf schmalen Breiten mindestens h-11). Mit
  * unlesbaren Zeitangaben bleibt der Block als solcher erkennbar
  * (destructiver Punkt, Hinweistext), statt still zu verschwinden.
+ *
+ * Kein Check-in nötig: Ein Slot im Status "nicht erschienen" ist ein
+ * beendeter No-Show – das Badge erscheint, aber der Block wechselt vom
+ * Beleg-Stil in den freien Stil (Muted-Fläche mit gestrichelltem Rand wie
+ * ein FreeSlot), denn der Raum ist fachlich wieder frei (Konzept
+ * „Check-in & No-Show": Nach Ablauf der Frist ohne Check-in ... wechselt
+ * der Block vom Beleg-Stil in den freien Stil).
  */
 function BookedSlot({
   slot,
@@ -354,8 +361,11 @@ function BookedSlot({
 }: BookedSlotProps) {
   const booking = slot.booking as TimeGridBooking;
   const placeholder = slot.placeholder === true;
+  const noShow = booking.status === "nicht erschienen";
+  const istFreiStil = noShow;
   const pruefbar =
     !placeholder &&
+    !noShow &&
     currentUser !== undefined &&
     currentUser !== "" &&
     createdByGleich(booking.createdBy, currentUser);
@@ -370,16 +380,27 @@ function BookedSlot({
     <div
       data-testid="timegrid-slot-booked"
       className={cn(
-        "flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md bg-primary-tint px-3 py-2 ring-1 ring-inset ring-primary/30",
-        !placeholder && HOUR_HEIGHT_CLASS
+        "flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md px-3 py-2",
+        istFreiStil
+          ? cn(
+              "border border-dashed border-border bg-muted text-xs text-muted-foreground",
+              HOUR_HEIGHT_CLASS
+            )
+          : !placeholder
+            ? cn("bg-primary-tint ring-1 ring-inset ring-primary/30", HOUR_HEIGHT_CLASS)
+            : undefined
       )}
-      style={{ height: placeholder ? undefined : heightStyle(slot) }}
+      style={{ height: placeholder || istFreiStil ? undefined : heightStyle(slot) }}
     >
       <span className="flex min-w-0 items-center gap-2">
         <span
           className={cn(
             "h-2 w-2 shrink-0 rounded-full",
-            placeholder ? "bg-destructive" : "bg-primary"
+            placeholder
+              ? "bg-destructive"
+              : istFreiStil
+                ? "bg-muted-foreground/50"
+                : "bg-primary"
           )}
           aria-hidden="true"
         />
@@ -387,12 +408,20 @@ function BookedSlot({
           <span className="text-sm font-medium tabular-nums text-destructive">
             Zeitangabe unlesbar
           </span>
+        ) : istFreiStil ? (
+          <span className="tabular-nums">
+            {labelAt(slot, "start")} – {labelAt(slot, "end")}
+          </span>
         ) : (
           <span className="text-sm font-medium tabular-nums text-primary">
             {labelAt(slot, "start")} – {labelAt(slot, "end")}
           </span>
         )}
-        <span className="sr-only">belegt</span>
+        <span
+          className={cn("sr-only", istFreiStil ? "sr-only" : undefined)}
+        >
+          {istFreiStil ? "frei" : placeholder ? "belegt" : "belegt"}
+        </span>
       </span>
       <span className="ml-auto flex flex-wrap items-center justify-end gap-2">
         {/* Fehler zuerst: Der Nutzer muss den Fall adressieren (Konzept:

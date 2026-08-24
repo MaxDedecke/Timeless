@@ -102,6 +102,50 @@ describe("TimeGrid – Slot-Darstellung", () => {
     expect(badge).toHaveClass("text-warning");
   });
 
+  it("rendert einen no-show-freigegebenen Slot mit free-Style, Badge 'Nicht erschienen' und ohne Check-in-Button", () => {
+    // Ein no-show-freigegebener Slot: Der Block wechselt vom Beleg-Stil in
+    // den freien Stil (Muted-Fläche mit gestricheltem Rand) und zeigt das
+    // Badge 'Nicht erschienen' – aber keinen Check-in-Button mehr.
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 103,
+              start: "09:00",
+              end: "10:00",
+              status: "nicht erschienen",
+              createdBy: "anna@designfreak.de",
+            },
+          ]),
+        ]}
+      />
+    );
+
+    const slot = screen.getByTestId("timegrid-slot-booked");
+    // Free-Style: Muted-Fläche mit gestricheltem Rand, keine Primary-Tönung.
+    expect(slot).toHaveClass("bg-muted");
+    expect(slot).toHaveClass("border-dashed");
+    expect(slot).not.toHaveClass("bg-primary-tint");
+    // Badge 'Nicht erschienen' ist sichtbar (default-Variante, neutral).
+    const badge = within(slot).getByText("Nicht erschienen");
+    expect(badge).toHaveClass("bg-muted");
+    expect(badge).toHaveClass("text-foreground");
+    // Kein Check-in-Button – die Buchung ist beendet und freigegeben.
+    expect(
+      within(slot).queryByTestId(/timegrid-checkin-/)
+    ).not.toBeInTheDocument();
+    expect(
+      within(slot).queryByText("Check-in")
+    ).not.toBeInTheDocument();
+    // Die Zeiten sind weiterhin lesbar und mit tabular-nums formatiert.
+    expect(slot).toHaveTextContent("09:00 – 10:00");
+    expect(within(slot).getByText(/09:00/)).toHaveClass("tabular-nums");
+  });
+
   it("rendert direkt aneinander grenzende Buchungen ohne dazwischenliegenden freien Slot", () => {
     render(
       <TimeGrid
