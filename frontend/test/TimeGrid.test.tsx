@@ -319,7 +319,8 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
   });
 
   it("zeigt den Check-in-Button an der laufenden eigenen bestätigten Buchung", () => {
-    setzeUhrzeit(10, 30);
+    // 10:07 liegt im Fenster [Beginn, Beginn+Frist) = [10:00, 10:15).
+    setzeUhrzeit(10, 7);
     render(
       <TimeGrid
         onRetry={() => {}}
@@ -416,7 +417,7 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
   });
 
   it("vergleicht den Urheber groß-/kleinungsunabhängig", () => {
-    setzeUhrzeit(10, 30);
+    setzeUhrzeit(10, 7);
     render(
       <TimeGrid
         onRetry={() => {}}
@@ -465,7 +466,7 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
   });
 
   it("ruft onCheckIn mit der Slot-Buchung und zeigt den Spinner während des Absendens", async () => {
-    setzeUhrzeit(10, 30);
+    setzeUhrzeit(10, 7);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const onCheckIn = vi.fn();
     render(
@@ -522,7 +523,7 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
   });
 
   it("zeigt bei gescheitertem Check-in das destructive Inline-Feedback am Block (kein Toast)", () => {
-    setzeUhrzeit(10, 30);
+    setzeUhrzeit(10, 7);
     render(
       <TimeGrid
         onRetry={() => {}}

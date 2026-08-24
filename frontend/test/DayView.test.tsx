@@ -108,6 +108,8 @@ interface BackendOptionen {
   buchungenJeRaum?: Record<number, MockBuchung[]>;
   locationsFehler?: boolean;
   roomsFehler?: boolean;
+  /** Wird bei POST /api/bookings/:id/check-in gerufen. */
+  onCheckIn?: (id: number) => Response | Promise<Response>;
 }
 
 /**
@@ -121,9 +123,10 @@ function installBackend({
   buchungenJeRaum = {},
   locationsFehler = false,
   roomsFehler = false,
+  onCheckIn,
 }: BackendOptionen = {}) {
   const mock = vi.fn(
-    async (input: RequestInfo | URL): Promise<Response> => {
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = apiUrl(input);
       if (!url.startsWith("/api/")) {
         throw new Error(`Nicht-relativer Pfad: ${url}`);
@@ -140,6 +143,13 @@ function installBackend({
       // Raumkalender; fehlt ein Raum im Mock, gilt er als buchungsfrei.
       // Mit date gilt dieselbe Semantik wie im echten Backend: nur
       // Buchungen, die den Tag schneiden (halboffenes Intervall).
+      const checkInMatch = /^\/api\/bookings\/(\d+)\/check-in$/.exec(url);
+      if (checkInMatch !== null && init?.method === "POST") {
+        if (onCheckIn === undefined) {
+          throw new Error(`Unerwarteter Check-in ohne Handler: ${url}`);
+        }
+        return onCheckIn(Number(checkInMatch[1]));
+      }
       const match = /^\/api\/bookings\?roomId=(\d+)/.exec(url);
       if (match !== null) {
         const liste = buchungenJeRaum[Number(match[1])] ?? [];

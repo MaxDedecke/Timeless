@@ -3,6 +3,7 @@ import { AlertCircle, CalendarPlus } from "lucide-react";
 
 import { ApiError } from "../api/http";
 import { createBooking } from "../api/bookings";
+import { setCurrentUser } from "../lib/currentUser";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import {
@@ -133,6 +134,11 @@ export default function BookingForm({
         endsAt: `${datum}T${ende.slice(0, 5)}:00Z`,
         createdBy: urheber.trim(),
       });
+      // Ab jetzt gilt diese Person der Ansicht als „angemeldet" (Naht
+      // lib/currentUser bis zur SSO-Klärung): Nur so erkennt der Raumkalender
+      // und die Tagesansicht die frische Buchung als eigene und zeigt ihren
+      // Check-in-Button an. Idempotent, ohne Auswirkung auf den POST.
+      setCurrentUser(urheber);
       setSpeichert(false);
       onGespeichert();
       onOpenChange(false);

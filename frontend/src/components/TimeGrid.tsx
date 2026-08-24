@@ -79,12 +79,12 @@ export type TimeGridCheckInHandler = (booking: TimeGridBooking) => void;
  * [Beginn, min(Beginn + X Minuten, Ende)) – und zwar nur für bestätigte
  * Buchungen, die noch nicht eingecheckt sind.
  *
- * „Laufend“ ist hier bewusst weiter gefasst als im Backend-Endpunkt
- * (`Start <= jetzt < Ende`): Innerhalb der Frist, aber nach dem Ende, zeigt
- * die Ansicht den Button weiterhin – wer zu spät kommt, soll nicht mit einer
- * toten Oberfläche allein gelassen werden, sondern erhält beim Absenden die
- * verständliche Backend-Ablehnung (HTTP 409) als Inline-Fehler. Die Frist X
- * bleibt bis zur Konfigurations-API hier an zentraler Stelle hinterlegt.
+ * Vor Beginn erscheint die Aktion nicht (der Check-in gehört zur laufenden
+ * Buchung), nach Beginn spätestens mit Ablauf der No-Show-Frist X nicht mehr;
+ * liegt X hinter dem Ende, endet das Fenster spätestens mit dem Ende – der
+ * Backend-Endpunkt lehnt einen verspäteten Versuch dann mit HTTP 409 ab,
+ * was als Inline-Fehler am Block erscheint. Die Frist X bleibt bis zur
+ * Konfigurations-API hier an zentraler Stelle hinterlegt.
  */
 export function checkInFenster(
   booking: Pick<TimeGridBooking, "start" | "end" | "status">
