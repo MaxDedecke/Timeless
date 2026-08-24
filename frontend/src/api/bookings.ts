@@ -18,6 +18,13 @@ export interface Booking {
   endsAt: string;
   /** Datenbank-Textwert, z. B. „bestaetigt" – Mapping via BookingStatusBadge. */
   status: string;
+  /**
+   * No-Show-Frist in Minuten, die für diese Buchung gilt (aus der
+   * System-Konfiguration): Das Check-in-Fenster im Frontend endet spätestens
+   * `startsAt + noShowAfterMinutes`. Wird pro Buchung mitgeliefert, damit das
+   * Frontend ohne separates Config-Request die Frist kennt.
+   */
+  noShowAfterMinutes: number;
 }
 
 /** Rohe Eingabefelder einer Buchung, wie sie der Client sendet. */

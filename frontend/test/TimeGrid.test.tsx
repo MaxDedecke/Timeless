@@ -320,6 +320,7 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
 
   it("zeigt den Check-in-Button an der laufenden eigenen bestätigten Buchung", () => {
     // 10:07 liegt im Fenster [Beginn, Beginn+Frist) = [10:00, 10:15).
+    // noShowAfterMinutes fehlt hier bewusst (Default 15 gilt).
     setzeUhrzeit(10, 7);
     render(
       <TimeGrid
@@ -441,9 +442,9 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
     expect(screen.getByTestId("timegrid-checkin-105")).toBeInTheDocument();
   });
 
-  it("endet das Fenster nach Ablauf der No-Show-Frist (Beginn + X Minuten) – auch wenn die Buchung noch läuft", () => {
-    // Frist X = 15 Minuten (NO_SHOW_GRACE_MINUTES): um 10:16 ist Schluss,
-    // obwohl die Buchung bis 11:00 läuft.
+  it("endet das Fenster nach Ablauf der konfigurierten No-Show-Frist (Beginn + X Minuten) – auch wenn die Buchung noch läuft", () => {
+    // Frist X = 15 Minuten (Default): um 10:16 ist Schluss, obwohl die
+    // Buchung bis 11:00 läuft.
     setzeUhrzeit(10, 16);
     render(
       <TimeGrid
@@ -458,6 +459,8 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
               end: `${heute()}T11:00:00.000Z`,
               status: "bestaetigt",
               createdBy: "anna@designfreak.de",
+              // Explizite Frist aus der Konfiguration (hier = Default 15).
+              noShowAfterMinutes: 15,
             },
           ]),
         ]}
@@ -465,6 +468,62 @@ describe("TimeGrid – Check-in-Button (Sichtbarkeit)", () => {
     );
 
     expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+
+  it("endet das Fenster anhand einer von 15 abweichenden Frist – Check-in ist nur innerhalb [Beginn, Beginn + Frist) sichtbar", () => {
+    // Konfigurierte Frist X = 10 Minuten statt 15: Das Fenster ist
+    // [10:00, 10:10). Um 10:11 ist der Check-in bereits weg, obwohl die
+    // Buchung bis 11:00 läuft und der Default-Fallback 15 Minuten wäre.
+    setzeUhrzeit(10, 11);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 110,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+              noShowAfterMinutes: 10,
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId(/timegrid-checkin-/)).not.toBeInTheDocument();
+  });
+
+  it("beginnt das Fenster nicht vor der ausgelaufenen Frist – Check-in erst ab Beginn sichtbar", () => {
+    // Frist X = 10 Minuten, Fenster [10:00, 10:10). Um 10:09 liegt man
+    // innerhalb und der Button ist sichtbar – das bestätigt, dass die kürzere
+    // Frist das Fenster verkleinert, nicht verschoben hat.
+    setzeUhrzeit(10, 9);
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        currentUser="anna@designfreak.de"
+        onCheckIn={vi.fn()}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 110,
+              start: `${heute()}T10:00:00.000Z`,
+              end: `${heute()}T11:00:00.000Z`,
+              status: "bestaetigt",
+              createdBy: "anna@designfreak.de",
+              noShowAfterMinutes: 10,
+            },
+          ]),
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId("timegrid-checkin-110")).toBeInTheDocument();
   });
 
   it("ruft onCheckIn mit der Slot-Buchung und zeigt den Spinner während des Absendens", async () => {

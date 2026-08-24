@@ -42,6 +42,7 @@ const sampleBooking: Booking = {
   startsAt: "2026-08-25T09:05:00.000Z",
   endsAt: "2026-08-25T10:30:00.000Z",
   status: "bestaetigt",
+  noShowAfterMinutes: 15,
 };
 
 describe("bookings API-Client", () => {

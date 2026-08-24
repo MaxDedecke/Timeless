@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import { pool } from "./db.js";
 import amenitiesRouter from "./routes/amenities.js";
 import bookingsRouter from "./routes/bookings.js";
+import configRouter from "./routes/config.js";
 import locationsRouter from "./routes/locations.js";
 import roomsRouter from "./routes/rooms.js";
 
@@ -17,6 +18,8 @@ app.use("/api/rooms", roomsRouter);
 // Buchungswesen (Sprint 2): POST /api/bookings mit Konfliktprüfung gegen
 // Doppelbuchungen.
 app.use("/api/bookings", bookingsRouter);
+// System-Konfiguration (Anforderung 1: No-Show-Frist) für das Frontend.
+app.use("/api/config", configRouter);
 
 // Liveness: Prozess läuft, ohne an die Datenbank gebunden zu sein.
 app.get("/api/health", (_req: Request, res: Response) => {

@@ -40,15 +40,6 @@ export const DAY_END_MINUTES = 20 * 60;
 /** Rasterbreite in Minuten: Positionen fallen auf dieses Raster. */
 export const GRID_MINUTES = 15;
 
-/**
- * Konfigurierbare No-Show-Frist in Minuten (Anforderung „Automatische
- * Freigabe bei No-Show“): Das Check-in-Fenster endet spätestens X Minuten
- * nach Beginn. Der Wert ist hier fest hinterlegt, weil es die Einstellungs-
- * seite (Sidebar „Einstellungen“, Konfigurations-API) noch nicht gibt – das
- * Ticket zur Freigabe-Logik zieht ihn an dieselbe zentrale Stelle.
- */
-export const NO_SHOW_GRACE_MINUTES = 15;
-
 /** Buchung so, wie die Ansichten sie der Komponente geben. */
 export interface TimeGridBooking {
   id: number | string;
@@ -56,8 +47,8 @@ export interface TimeGridBooking {
   end: string;
   status?: string;
   /**
-   * Urheber der Buchung (API-Feld `createdBy`) – Grundlage der Regel „nur
-   * eigene Buchungen zeigen den Check-in“. Ohne Angabe (alter Teststand)
+   * Urheber der Buchung (API-Feld `createdBy`) – Grundlage der Regel
+   * „nur eigene Buchungen zeigen den Check-in“. Ohne Angabe (alter Teststand)
    * gilt die Buchung nicht als eigene und bekommt keinen Check-in.
    */
   createdBy?: string;
@@ -67,9 +58,17 @@ export interface TimeGridBooking {
    * die ganze Ansicht ins Skeleton zu werfen.
    */
   roomId?: number;
+  /**
+   * No-Show-Frist in Minuten, die für diese Buchung gilt (aus der
+   * System-Konfiguration): Das Check-in-Fenster im Frontend endet spätestens
+   * `start + noShowAfterMinutes`. Wird pro Buchung mitgeliefert, damit das
+   * Frontend ohne separates Config-Request die Frist kennt.
+   */
+  noShowAfterMinutes?: number;
   /** Wird vor dem Absenden des Check-ins gesetzt: Spinner statt Icon. */
   checkingIn?: boolean;
 }
+
 
 /** Rückruf je Spur-Buchung – im TimeGrid als reine Ansichtskomponente. */
 export type TimeGridCheckInHandler = (booking: TimeGridBooking) => void;
@@ -83,18 +82,37 @@ export type TimeGridCheckInHandler = (booking: TimeGridBooking) => void;
  * Buchung), nach Beginn spätestens mit Ablauf der No-Show-Frist X nicht mehr;
  * liegt X hinter dem Ende, endet das Fenster spätestens mit dem Ende – der
  * Backend-Endpunkt lehnt einen verspäteten Versuch dann mit HTTP 409 ab,
- * was als Inline-Fehler am Block erscheint. Die Frist X bleibt bis zur
- * Konfigurations-API hier an zentraler Stelle hinterlegt.
+ * was als Inline-Fehler am Block erscheint. Die Frist X kommt aus der
+ * System-Konfiguration, die das Backend pro Buchung in
+ * `noShowAfterMinutes` mitliefert (siehe Interface TimeGridBooking). Fehlt
+ * das Feld (alter Teststand), wird ein konstanter Default herangezogen –
+ * der Check-in darf nicht wegen einer fehlen Frist verschwinden.
+ */
+const DEFAULT_NO_SHOW_AFTER_MINUTES = 15;
+
+/** Ermittelt die gültige No-Show-Frist für eine Buchung. */
+function noShowFristDerBuchung(
+  booking: Pick<TimeGridBooking, "noShowAfterMinutes">
+): number {
+  const frist = booking.noShowAfterMinutes;
+  return typeof frist === "number" && frist > 0 ? frist : DEFAULT_NO_SHOW_AFTER_MINUTES;
+}
+
+/**
+ * Sichtbarkeitsfenster der Check-in-Aktion (Konzept „Check-in & No-Show"):
+ * [Beginn, min(Beginn + X Minuten, Ende)) – und zwar nur für bestätigte
+ * Buchungen, die noch nicht eingecheckt sind.
  */
 export function checkInFenster(
-  booking: Pick<TimeGridBooking, "start" | "end" | "status">
+  booking: Pick<TimeGridBooking, "start" | "end" | "status" | "noShowAfterMinutes">
 ): { von: Date; bis: Date } | null {
   if (booking.status !== "bestaetigt") return null;
   const start = new Date(booking.start);
   const end = new Date(booking.end);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const fristMinuten = noShowFristDerBuchung(booking);
   const fristEndeMs = Math.min(
-    start.getTime() + NO_SHOW_GRACE_MINUTES * 60 * 1000,
+    start.getTime() + fristMinuten * 60 * 1000,
     end.getTime()
   );
   return { von: start, bis: new Date(fristEndeMs) };
@@ -102,7 +120,7 @@ export function checkInFenster(
 
 /** Prüft, ob `jetzt` im Check-in-Fenster der Buchung liegt. */
 export function checkInMoeglich(
-  booking: Pick<TimeGridBooking, "start" | "end" | "status">,
+  booking: Pick<TimeGridBooking, "start" | "end" | "status" | "noShowAfterMinutes">,
   jetzt: Date = new Date()
 ): boolean {
   const fenster = checkInFenster(booking);

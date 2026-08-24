@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool } from "../db.js";
+import { getConfig } from "./config.js";
 import {
   ConflictError,
   DomainNotFoundError,
@@ -24,6 +25,13 @@ export interface Booking {
   startsAt: string;
   endsAt: string;
   status: string;
+  /**
+   * No-Show-Frist in Minuten, die für diese Buchung gilt (aus der
+   * System-Konfiguration): Das Check-in-Fenster im Frontend endet spätestens
+   * `StartsAt + noShowAfterMinutes`. Wird pro Buchung mitgeliefert, damit das
+   * Frontend ohne separates Config-Request die Frist kennt.
+   */
+  noShowAfterMinutes: number;
 }
 
 /** Rohe Eingabefelder einer Buchung, wie sie der Client sendet. */
@@ -61,6 +69,11 @@ const BOOKING_SELECT = `
          status
   FROM bookings`;
 
+/** Liefert die System-Konfiguration (No-Show-Frist) für eine Booking-Antwort. */
+function noShowFrist(): number {
+  return getConfig().noShowAfterMinutes;
+}
+
 function toBooking(row: BookingRow): Booking {
   return {
     id: row.id,
@@ -69,6 +82,7 @@ function toBooking(row: BookingRow): Booking {
     startsAt: new Date(row.startsAt).toISOString(),
     endsAt: new Date(row.endsAt).toISOString(),
     status: row.status,
+    noShowAfterMinutes: noShowFrist(),
   };
 }
 

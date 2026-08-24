@@ -342,6 +342,9 @@ export default function RoomCalendar() {
         // Buchung“) bzw. das gezielte Nachladen in der Tagesansicht.
         createdBy: buchung.createdBy,
         roomId: buchung.roomId,
+        // No-Show-Frist aus der API-Antwort an TimeGrid weitergeben,
+        // damit das Check-in-Fenster dynamisch statt hart an 15 Minuten ist.
+        noShowAfterMinutes: buchung.noShowAfterMinutes,
       })),
     };
   }, [loadState, buchungen, datum]);
