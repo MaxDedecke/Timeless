@@ -196,6 +196,11 @@ describe("RoomCalendar – Belegfall", () => {
     expect(screen.getByTestId("room-calendar-date-label")).toHaveClass(
       "tabular-nums"
     );
+    // Auch das native Datumsfeld des DateSwitchers reiht sich in die
+    // tabular-nums-Pflicht ein (Querprüfung Gesamtdurchlauf).
+    expect(screen.getByTestId("room-calendar-date-input")).toHaveClass(
+      "tabular-nums"
+    );
     const kapazitaet = screen.getByText(/Personen/);
     expect(kapazitaet).toHaveClass("tabular-nums");
 

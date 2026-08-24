@@ -135,7 +135,7 @@ function DateSwitcher({ datum, onChange }: DateSwitcherProps) {
           const wert = e.target.value;
           if (/^\d{4}-\d{2}-\d{2}$/.test(wert)) onChange(wert);
         }}
-        className={`${inputClass} w-auto`}
+        className={`${inputClass} w-auto tabular-nums`}
         data-testid="room-calendar-date-input"
         aria-label="Datum des Kalenders"
       />
