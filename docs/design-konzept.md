@@ -194,6 +194,31 @@ Adressaten dieses Kapitels sind die Umsetzungs-Tickets zu Anforderung 1 (Check-i
 - Der Freigabe-Lauf setzt den Status `nicht erschienen` und gibt den Zeitraum fachlich frei (die Verfügbarkeitsprüfung zählt ihn fortan nicht mehr als belegt – Backend-Arbeit, hier nur der Randhinweis).
 - **Darstellung im Raster:** Der Block bleibt als Eintrag des Tages sichtbar – erkennbar bleiben soll ja, warum der Raum jetzt wieder frei ist – wechselt aber vom Beleg-Stil in den freien Stil (Muted-Fläche mit gestricheltem Rand wie ein `FreeSlot`) und zeigt das Badge „Nicht erschienen" im neutralen Muted-Stil. Damit ist „erscheint nicht mehr als belegt" (Anforderung 2) auch farblich erfüllt: keine Primary-Tönung mehr, kein Check-in-Button mehr. Dieselbe Darstellung gilt später je Zeile in „Meine Buchungen".
 
+## Genehmigungsworkflow
+
+Die Umsetzungs-Ansicht zu Anforderung 10 („Genehmigungsworkflow zum Prüfen und Entscheiden von Anfragen") ist die Route `/approvals`. Sie ist der zentrale Einstieg für berechtigte Rollen (Facility-Manager, Admin), die offene Genehmigungsanfragen zu sehen und zu entscheiden. Antragsteller behalten über „Meine Buchungen" den Status ihrer Anfrage (ausstehend, genehmigt, abgelehnt). Das Backend liefert Buchungen mit `requires_approval`-Konzept; im Frontend wird ein Raum als genehmigungspflichtig angezeigt und eine neue Buchung in einem solchen Raum erhält zunächst den Status `ausstehend` (Anforderung 13).
+
+**Route & Navigation:** Eigenständige Route `/approvals`, registriert in `App.tsx`. Sidebar-Menüpunkt `Genehmigungen` in der Gruppe **Verwalten** (Facility-Manager/Admin), platziert direkt unter `Räume`. Der NavLink verwendet `ShieldCheck` als Icon und folgt dem Muster ohne `end`-Flag (aktive Markierung gilt für den Bereich).
+
+**Seitenkopf:** Einheitliches Muster – Titel „Genehmigungen" links, keine Primäraktion (die Aktionen liegen pro Zeile). Untertitel: „Offene Anfragen zur Genehmigung".
+
+**Anfrageliste:** Tabelle (shadcn/ui-Table-Bibliothek) mit Spalten: Buchungs-Art (Einzeltermin/Serie), Raum, Standort, Datum, Zeitraum, Antragsteller, Status (Über die `BookingStatusBadge`). Offene Anfragen (`ausstehend`) werden per default zuerst angezeigt, gefolgt von `genehmigt` und `abgelehnt` innerhalb desselben Tabs. Pro Zeile Aktionsbuttons:
+
+- **Genehmigen** (primäre Aktion, `variant="default"`, `Check`-Icon) öffnet per shadcn/Dialog einen Bestätigungsdialog mit `AlertCircle`-Warnsymbol, dem Text „Möchtest du diese Anfrage wirklich genehmigen? Der Raum wird für den gewünschten Zeitraum verbindlich belegt." und den Schaltflächen `Genehmigen" (primär) / `Abbrechen" (outline).
+- **Ablehnen** (sekundäre Aktion, `variant="outline"` oder `variant="ghost"`) öffnet denselben Bestätigungsdialog mit `XCircle`-Warnsymbol, Text „Möchtest du diese Anfrage wirklich ablehnen? Der angeforderte Zeitraum wird freigegeben." und Schaltflächen `Ablehnen" (destructive) / `Abbrechen" (outline).
+
+**Statusanzeige für den Antragsteller:** Die `BookingStatusBadge` (vgl. „Buchungsstatus-Badge") rendert `pending` als „Ausstehend" (Warning-Variante), `approved` als „Genehmigt" (Success), `rejected` als „Abgelehnt" (Destructive). Diese drei Werte sind die relevanten Statuswerte im Genehmigungsworkflow; `BookingStatusBadge` übernimmt die Zuordnung.
+
+**Zustände der Anfrageliste:**
+
+- **Lädt:** Skeleton in der Layoutform der Tabelle – fünf Zeilen-Skeletons (`h-12` pro Zeile, wie im Tabellen-Raster von `ApprovalsSkeleton`), `aria-busy="true"`.
+- **Leer:** zentrierte `EmptyState`-Card mit `ShieldCheck`-Icon (`h-8 w-8 text-muted-foreground`), Kernaussage „Keine offenen Genehmigungsanfragen." und Erläuterung „Alle Anfragen sind aktuell bearbeitet." – Aktion ausschließlich „Zurück zur Raumliste" (`variant="outline"`).
+- **Fehler:** destructives `Alert` (variant="destructive") mit `AlertCircle`-Icon, Titel „Anfragen konnten nicht geladen werden" und Retry-Button „Erneut versuchen" (`destructive size="sm"`).
+
+**Implementierung:** Die Seite `frontend/src/pages/Approvals.tsx` ruft `GET /api/bookings/approvals` (API-Client `listApprovals` in `frontend/src/api/bookings.ts`) auf und rendert die Liste. Pro Zeile gibt es einen `BookingStatusBadge` und zwei Aktionsbuttons. Der Genehmigen-Button ist `variant="default"`, der Ablehnen-Button `variant="outline"` – beide öffnen einen shadcn/Dialog-Bestätigungsdialog mit Warnsymbol (`AlertCircle` für Genehmigen, `XCircle` für Ablehnen). Auf schmalen Breiten (< `md`) stapelt die Tabelle zu Karten mit `DropdownMenu` für die Aktionsbuttons. Touch-Ziele mindestens `h-11`. Die Entscheidung erfolgt über `PATCH /api/bookings/:id/status` (API-Client `decideBooking`), danach lädt die Seite die Anfragenliste neu.
+
+**Responsive-Verhalten:** Auf schmalen Breiten (< `md`) stapelt die Tabelle zu Karten – jeweils eine Card pro Anfrage mit den wichtigsten Feldern (Raum, Zeitraum, Status), DropdownMenu für die Aktionsbuttons. Touch-Ziele mindestens `h-11`.
+
 ## Leerzustand
 
 „Noch nichts angelegt" und „Filter liefert keinen Treffer" sind zwei Zustände mit eigenem Text und eigener Aktion (beide in `RoomList.tsx`). Gemeinsame Form: zentrierte shadcn/ui-**Card** (`px-6 py-14 text-center`) mit lucide-Icon (`h-8 w-8 text-muted-foreground`, `aria-hidden`), Kernaussage in `text-base font-medium`, Erläuterung in `text-sm text-muted-foreground`, Aktionen darunter:

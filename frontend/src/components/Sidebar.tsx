@@ -5,6 +5,7 @@ import {
   CalendarSearch,
   DoorOpen,
   Menu,
+  ShieldCheck,
   X,
 } from "lucide-react";
 
@@ -87,6 +88,17 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         {NAV_ITEMS.map((item) => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
+
+        {/* Gruppe Verwalten (Facility-Manager & Admin): Genehmigungen,
+            Raumverwaltung, Auslastungsberichte – platziert direkt unter
+            den Buchungs-Punkten, wie im Design-Konzept (Navigation) festgelegt. */}
+        <p className="px-3 pb-1 pt-2 text-xs uppercase tracking-wide text-sidebar-foreground/50">
+          Verwalten
+        </p>
+        <NavItem
+          item={{ to: "/approvals", label: "Genehmigungen", icon: ShieldCheck }}
+          onNavigate={onNavigate}
+        />
       </nav>
     </>
   );

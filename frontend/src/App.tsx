@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 
 import Sidebar from "./components/Sidebar";
+import Approvals from "./pages/Approvals";
 import DayView from "./pages/DayView";
 import RoomCalendar from "./pages/RoomCalendar";
 import RoomForm from "./pages/RoomForm";
@@ -73,6 +74,7 @@ function Shell() {
                 Datum als Suchparameter. Ohne Segment greift der Fallback auf
                 den ersten Standort – der Sidebar-Link zeigt deshalb bewusst
                 auf /day. */}
+            <Route path="/approvals" element={<Approvals />} />
             <Route path="/day" element={<DayView />} />
             <Route path="/day/:locationId" element={<DayView />} />
             {/* Unbekannte Pfade landen wie die Wurzel direkt bei der

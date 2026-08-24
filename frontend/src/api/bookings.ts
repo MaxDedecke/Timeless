@@ -84,3 +84,60 @@ export function checkInBooking(id: number): Promise<Booking> {
     method: "POST",
   });
 }
+
+/**
+ * Genehmigungsanfragen fuer berechtigte Rollen laden (GET
+ * /api/bookings/approvals, Anforderung 10 – Genehmigungsworkflow): Liefert alle
+ * Buchungen mit status = 'ausstehend', also Anfragen, die noch nicht
+ * genehmigt oder abgelehnt wurden. Die Antwort ist eine Liste von
+ * ApprovalBooking-Objekten in derselben Form wie GET /api/bookings; zusaetzlich
+ * enthaelt jede Zeile das zugehoerige `room` (Name) und `location` (Name),
+ * damit die Genehmigungsliste die wichtigsten Kontext-Felder ohne separaten
+ * Request anzeigen kann.
+ *
+ * Die API-Funktion ist so gebaut, dass sie auch funktioniert, wenn das
+ * Backend die /approvals-Route noch nicht implementiert hat – der Aufruf
+ * laeut ueber den relativen /api-Pfad und liefert entweder die Liste oder
+ * einen ApiError. Sobald das Backend die Route bereitstellt, ist keine
+ * weitere Frontend-Anpassung noetig.
+ */
+export interface ApprovalBooking {
+  id: number;
+  roomId: number;
+  createdBy: string;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  noShowAfterMinutes: number;
+  room: {
+    id: number;
+    name: string;
+  };
+  location: {
+    id: number;
+    name: string;
+  };
+}
+
+/**
+ * Laedt alle offenen Genehmigungsanfragen (Status 'ausstehend').
+ * Dies ist die Vorbereitung auf die Backend-API: Die Funktion ruft
+ * GET /api/bookings/approvals auf und gibt die Liste der Anfragen zurueck.
+ */
+export function listApprovals(): Promise<ApprovalBooking[]> {
+  return requestJson<ApprovalBooking[]>("/api/bookings/approvals");
+}
+
+/**
+ * Entscheidet ueber eine Genehmigungsanfrage (PATCH /api/bookings/:id/status).
+ * `status` ist entweder 'approved' oder 'rejected'.
+ */
+export function decideBooking(
+  id: number,
+  status: "approved" | "rejected"
+): Promise<ApprovalBooking> {
+  return requestJson<ApprovalBooking>(
+    `/api/bookings/${encodeURIComponent(id)}/status`,
+    { method: "PATCH", body: { status } }
+  );
+}
