@@ -63,3 +63,17 @@ export function listBookingsForRoom(
 export function createBooking(input: BookingInput): Promise<Booking> {
   return requestJson<Booking>("/api/bookings", { method: "POST", body: input });
 }
+
+/**
+ * Check-in der aktuell laufenden Buchung (Anforderung „Check-in für laufende
+ * Buchung“; Endpunkt aus Commit b6705376). Erfolg liefert die aktualisierte
+ * Buchung mit Status „eingecheckt“ (HTTP 200) – auch ein zweiter Check-in ist
+ * idempotent und antwortet erneut mit dem unveränderten Datensatz. Fehler als
+ * ApiError: 404 (unbekannte Buchung), 409 (läuft nicht / nicht bestätigt),
+ * 400 (Validierung).
+ */
+export function checkInBooking(id: number): Promise<Booking> {
+  return requestJson<Booking>(`/api/bookings/${encodeURIComponent(id)}/check-in`, {
+    method: "POST",
+  });
+}

@@ -1,4 +1,11 @@
-import { AlertCircle, CalendarX, Inbox, RotateCw } from "lucide-react";
+import {
+  AlertCircle,
+  CalendarX,
+  Check,
+  Inbox,
+  LoaderCircle,
+  RotateCw,
+} from "lucide-react";
 
 import BookingStatusBadge from "./BookingStatusBadge";
 import { cn } from "../lib/utils";
@@ -34,13 +41,33 @@ export const DAY_END_MINUTES = 20 * 60;
 /** Rasterbreite in Minuten: Positionen fallen auf dieses Raster. */
 export const GRID_MINUTES = 15;
 
+/**
+ * Konfigurierbare No-Show-Frist in Minuten (Anforderung „Automatische
+ * Freigabe bei No-Show“): Das Check-in-Fenster endet spätestens X Minuten
+ * nach Beginn. Der Wert ist hier fest hinterlegt, weil es die Einstellungs-
+ * seite (Sidebar „Einstellungen“, Konfigurations-API) noch nicht gibt – das
+ * Ticket zur Freigabe-Logik zieht ihn an dieselbe zentrale Stelle.
+ */
+export const NO_SHOW_GRACE_MINUTES = 15;
+
 /** Buchung so, wie die Ansichten sie der Komponente geben. */
 export interface TimeGridBooking {
   id: number | string;
   start: string;
   end: string;
   status?: string;
+  /**
+   * Urheber der Buchung (API-Feld `createdBy`) – Grundlage der Regel „nur
+   * eigene Buchungen zeigen den Check-in“. Ohne Angabe (alter Teststand)
+   * gilt die Buchung nicht als eigene und bekommt keinen Check-in.
+   */
+  createdBy?: string;
+  /** Wird vor dem Absenden des Check-ins gesetzt: Spinner statt Icon. */
+  checkingIn?: boolean;
 }
+
+/** Rückruf je Spur-Buchung – im TimeGrid als reine Ansichtskomponente. */
+export type TimeGridCheckInHandler = (booking: TimeGridBooking) => void;
 
 /** Eine Spur ist typisch ein Raum: Titel plus seine Buchungen des Tags. */
 export interface TimeGridLane {
