@@ -41,6 +41,19 @@ export function listRooms(): Promise<Room[]> {
 }
 
 /**
+ * Freie Räume für einen Zeitraum (GET /api/rooms/available?from=&to=,
+ * Anforderung 1): liefert ausschließlich Räume ohne überschneidende Buchung
+ * im halboffenen Intervall [from, to) – dieselbe Raumform wie GET /api/rooms.
+ * from/to als ISO-Zeitstempel mit Z-Suffix (eindeutig UTC, wie das
+ * BookingForm sie sendet); ein ungültiger oder invertierter Zeitraum kommt
+ * als ApiError mit Status 400 und Backend-Meldung zurück.
+ */
+export function listAvailableRooms(fromIso: string, toIso: string): Promise<Room[]> {
+  const query = new URLSearchParams({ from: fromIso, to: toIso });
+  return requestJson<Room[]>(`/api/rooms/available?${query.toString()}`);
+}
+
+/**
  * Liest einen einzelnen Raum inklusive Standort und Merkmale
  * (GET /api/rooms/:id) – Vorausfüllung des Bearbeiten-Formulars. Eine
  * unbekannte oder nicht-numerische ID kommt als ApiError mit Status 404.

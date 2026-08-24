@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   CalendarDays,
   CalendarCheck,
+  CalendarSearch,
   DoorOpen,
   Menu,
   X,
@@ -30,8 +31,12 @@ interface MenuItem {
 // (Konzept, Navigation) – das Raumdetail markiert weiter „Räume“. Spätere
 // Gruppen (Verwalten/Administration) kommen hier hinzu, ohne das Layout
 // anzufassen.
+// „Freie Räume" (Konzept „Freie-Räume-Suche"): Suche nach Zeitraum und
+// Ausstattung unter /free, zwischen „Räume" und „Tagesansicht" in der
+// Gruppe Buchen.
 const NAV_ITEMS: MenuItem[] = [
   { to: "/rooms", label: "Räume", icon: DoorOpen },
+  { to: "/free", label: "Freie Räume", icon: CalendarSearch },
   { to: "/day", label: "Tagesansicht", icon: CalendarDays },
 ];
 

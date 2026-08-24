@@ -16,14 +16,22 @@ import {
 } from "../api/amenities";
 
 /**
- * Ausstattungsfilter der Raumliste: Checkbox-Gruppe über dem festen
- * Merkmals-Katalog (Beschluss 21.8.2026 – nur lesend, siehe
- * backend/src/routes/amenities.ts). Kontrollierter State – die Auswahl liegt
- * bei der Raumliste; diese filtert clientseitig mit AND-Logik.
+ * Ausstattungsfilter: Checkbox-Gruppe über dem festen Merkmals-Katalog
+ * (Beschluss 21.8.2026 – nur lesend, siehe backend/src/routes/amenities.ts).
+ * Kontrollierter State – die Auswahl liegt bei der aufrufenden Ansicht;
+ * diese filtert clientseitig mit AND-Logik.
+ *
+ * Referenz-Nutzung ist die Raumliste (pages/RoomList.tsx). Die Freie-Räume-
+ * Suche (pages/RoomSearch.tsx) bindet dieselbe Komponente innerhalb ihrer
+ * Filter-Card ein (Konzept „Freie-Räume-Suche → Merkmale": dieselbe Gruppe
+ * mit AND-Logik statt einer Kopie); deshalb lebt der Baustein in components/.
+ * Lade- und Fehlerzustand des Katalogs bleiben bewusst inline innerhalb
+ * dieser Card – eine sekundäre Ladequelle blockiert nicht die ganze Ansicht
+ * (Konzept „Fehleranzeige").
  */
 
 interface AmenityFilterProps {
-  /** Gewählte Merkmals-Schlüssel (kontrolliert von RoomList). */
+  /** Gewählte Merkmals-Schlüssel (kontrolliert von der Ansicht). */
   selectedKeys: string[];
   onSelectionChange: (keys: string[]) => void;
 }

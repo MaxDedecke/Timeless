@@ -12,6 +12,7 @@ import DayView from "./pages/DayView";
 import RoomCalendar from "./pages/RoomCalendar";
 import RoomForm from "./pages/RoomForm";
 import RoomList from "./pages/RoomList";
+import RoomSearch from "./pages/RoomSearch";
 
 /**
  * App-Shell: dauerhafte Sidebar links (ab lg fixiert sichtbar, darunter
@@ -52,6 +53,9 @@ function Shell() {
         <div className="mx-auto max-w-7xl">
           <Routes>
             <Route path="/" element={<RootRedirect />} />
+            {/* Freie-Räume-Suche (Anforderung 4, Konzept „Freie-Räume-
+                Suche“): Route /free, Sidebar-Punkt „Freie Räume“. */}
+            <Route path="/free" element={<RoomSearch />} />
             <Route path="/rooms" element={<RoomList />} />
             {/* Raumkalender je Raum (Anforderung 1): /rooms/:id. Statische
                 Segmente (/rooms/new) schlagen vor dem dynamischen :id zu –

@@ -15,10 +15,12 @@ import {
 } from "../components/ui/dialog";
 
 /**
- * Buchungsdialog (Design-Konzept „Kernkomponenten → Dialog"): wird aus dem
- * Raumkalender über den „Raum buchen"-Primärbutton im Seitenkopf geöffnet.
- * Vorausgefüllt mit dem gewählten Kalendertag; Absenden ruft POST /api/
- * bookings auf. Zustände laut Konzept: Während des Speicherns bleibt der
+ * Buchungsdialog (Design-Konzept „Kernkomponenten → Dialog" und „Formularmuster:
+ * Dialog vs. Route"): kontextunabhängig – Raum und Zeitraum kommen ausschließlich
+ * als Props von der aufrufenden Ansicht. Einstiege heute: der Raumkalender über
+ * den „Raum buchen"-Primärbutton im Seitenkopf sowie die Freie-Räume-Suche je
+ * Treffer (pages/RoomSearch.tsx) mit vorbelegten Zeiten aus dem aktiven Suchfilter
+ * (startZeit/endZeit). Absenden ruft POST /api/bookings auf. Zustände laut Konzept: Während des Speicherns bleibt der
  * Dialog offen, der Submit-Button ist deaktiviert und zeigt einen Inline-
  * Spinner; ein Konflikt (HTTP 409) oder sonstiger Fachfehler erscheint als
  * destructives Alert MIT der Backend-Meldung, Eingaben bleiben erhalten.
@@ -41,17 +43,28 @@ interface FeldFehler {
 
 interface BookingFormProps {
   raumId: number;
-  /** Gewählter Kalendertag als „YYYY-MM-DD" – Vorausfüllung des Datumsfelds. */
+  /** Gewählter Tag als „YYYY-MM-DD" – Vorausfüllung des Datumsfelds. */
   kalenderDatum: string;
+  /**
+   * Optionale Zeit-Vorbelegung („HH:mm"), z. B. aus dem aktiven Suchfilter der
+   * Freie-Räume-Suche. Ohne Angabe starten die Zeitfelder leer – das ist der
+   * Pfad des Raumkalenders, dessen Verhalten sich dadurch nicht ändert.
+   * Bewusst nur Startwerte beim Öffnen (Reset-Effekt), kein kontrollierter
+   * Anschluss an Filter-State.
+   */
+  startZeit?: string;
+  endZeit?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Wird nach erfolgreicher Speicherung gerufen: Kalender lädt neu. */
+  /** Wird nach erfolgreicher Speicherung gerufen: Ansicht lädt neu. */
   onGespeichert: () => void;
 }
 
 export default function BookingForm({
   raumId,
   kalenderDatum,
+  startZeit = "",
+  endZeit = "",
   open,
   onOpenChange,
   onGespeichert,
@@ -64,18 +77,20 @@ export default function BookingForm({
   const [speicherFehler, setSpeicherFehler] = useState<string | null>(null);
   const [speichert, setSpeichert] = useState(false);
 
-  // Jedes Öffnen startet sauber: Kalendertag als Datum, leere Zeiten, keine
-  // alten Meldungen – kein veralteter Fehler über einer neuen Buchung.
+  // Jedes Öffnen startet sauber: Tag und – sofern von der Ansicht gereicht –
+  // vorbelegte Zeiten, keine alten Meldungen; kein veralteter Fehler über
+  // einer neuen Buchung. Ohne Vorbelegung (Raumkalender) bleiben die
+  // Zeitfelder leer wie bisher.
   useEffect(() => {
     if (open) {
       setDatum(kalenderDatum);
-      setStart("");
-      setEnde("");
+      setStart(startZeit);
+      setEnde(endZeit);
       setUrheber("");
       setFeldFehler({});
       setSpeicherFehler(null);
     }
-  }, [open, kalenderDatum]);
+  }, [open, kalenderDatum, startZeit, endZeit]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
