@@ -10,215 +10,215 @@ npm run build: exit 0
 
 Ausgabe:
 ```
-… (9948 Zeichen gekürzt)
- Fremdschlüssel abgelehnt
+… (9942 Zeichen gekürzt)
+om Fremdschlüssel abgelehnt
 ok 44 - DB: Raum ohne gültigen Standort wird vom Fremdschlüssel abgelehnt
   ---
-  duration_ms: 9.913159
+  duration_ms: 9.290634
   type: 'test'
   ...
 # Subtest: DB: gültiger Standort + Raum lässt sich anlegen
 ok 45 - DB: gültiger Standort + Raum lässt sich anlegen
   ---
-  duration_ms: 14.259336
+  duration_ms: 11.65743
   type: 'test'
   ...
 # Subtest: DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich und ändert nichts mehr
 ok 46 - DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich und ändert nichts mehr
   ---
-  duration_ms: 20.98022
+  duration_ms: 16.609785
   type: 'test'
   ...
 # Subtest: DB: Buchung auf gültigen Raum anlegen – Zeile lesbar und Status-Default 'bestaetigt' gesetzt
 ok 47 - DB: Buchung auf gültigen Raum anlegen – Zeile lesbar und Status-Default 'bestaetigt' gesetzt
   ---
-  duration_ms: 16.038191
+  duration_ms: 12.905002
   type: 'test'
   ...
 # Subtest: DB: Buchung mit unbekannter room_id wird vom Fremdschlüssel abgelehnt
 ok 48 - DB: Buchung mit unbekannter room_id wird vom Fremdschlüssel abgelehnt
   ---
-  duration_ms: 8.020007
+  duration_ms: 6.079802
   type: 'test'
   ...
 # Subtest: DB: Löschen eines Raums mit Buchung wird durch ON DELETE RESTRICT verweigert
 ok 49 - DB: Löschen eines Raums mit Buchung wird durch ON DELETE RESTRICT verweigert
   ---
-  duration_ms: 24.797108
+  duration_ms: 21.397964
   type: 'test'
   ...
 # Subtest: PUT /api/rooms/:id ohne vollständige Pflichtfelder wird mit 400 und Fehlermeldung abgelehnt
 ok 50 - PUT /api/rooms/:id ohne vollständige Pflichtfelder wird mit 400 und Fehlermeldung abgelehnt
   ---
-  duration_ms: 53.975871
+  duration_ms: 59.093613
   type: 'test'
   ...
 # Subtest: PATCH /api/rooms/:id mit explizit geleertem Pflichtfeld wird mit 400 abgelehnt
 ok 51 - PATCH /api/rooms/:id mit explizit geleertem Pflichtfeld wird mit 400 abgelehnt
   ---
-  duration_ms: 4.482114
+  duration_ms: 4.371744
   type: 'test'
   ...
 # Subtest: PATCH /api/rooms/:id mit leerem Körper ändert nichts (keine Validierungsfehler)
 ok 52 - PATCH /api/rooms/:id mit leerem Körper ändert nichts (keine Validierungsfehler)
   ---
-  duration_ms: 11.931445
+  duration_ms: 10.667834
   type: 'test'
   ...
 # Subtest: GET /api/rooms/:id mit nicht-numerischer ID liefert 404 ohne Datenbankzugriff
 ok 53 - GET /api/rooms/:id mit nicht-numerischer ID liefert 404 ohne Datenbankzugriff
   ---
-  duration_ms: 2.216078
+  duration_ms: 2.20982
   type: 'test'
   ...
 # Subtest: POST /api/rooms ohne Pflichtfelder wird mit 400 und Fehlermeldung abgelehnt
 ok 54 - POST /api/rooms ohne Pflichtfelder wird mit 400 und Fehlermeldung abgelehnt
   ---
-  duration_ms: 17.225079
+  duration_ms: 17.643091
   type: 'test'
   ...
 # Subtest: listRooms liefert je Raum die zugeordneten Merkmale mit
 ok 55 - listRooms liefert je Raum die zugeordneten Merkmale mit
   ---
-  duration_ms: 2.025074
+  duration_ms: 2.045243
   type: 'test'
   ...
 # Subtest: listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverändert zu
 ok 56 - listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverändert zu
   ---
-  duration_ms: 0.395325
+  duration_ms: 0.4561
   type: 'test'
   ...
 # Subtest: Raum anlegen: createRoom schreibt Name, Standort und Kapazität; der Raum ist anschließend per getRoom abrufbar
 ok 57 - Raum anlegen: createRoom schreibt Name, Standort und Kapazität; der Raum ist anschließend per getRoom abrufbar
   ---
-  duration_ms: 1.037993
+  duration_ms: 1.077147
   type: 'test'
   ...
 # Subtest: Raum anlegen mit fehlendem Namen wird abgelehnt, bevor die Datenbank berührt wird
 ok 58 - Raum anlegen mit fehlendem Namen wird abgelehnt, bevor die Datenbank berührt wird
   ---
-  duration_ms: 0.867677
+  duration_ms: 0.820413
   type: 'test'
   ...
 # Subtest: Raum anlegen mit fehlendem Standort wird abgelehnt, bevor die Datenbank berührt wird
 ok 59 - Raum anlegen mit fehlendem Standort wird abgelehnt, bevor die Datenbank berührt wird
   ---
-  duration_ms: 0.20359
+  duration_ms: 0.234454
   type: 'test'
   ...
 # Subtest: Raum anlegen mit fehlender Kapazität wird abgelehnt, bevor die Datenbank berührt wird
 ok 60 - Raum anlegen mit fehlender Kapazität wird abgelehnt, bevor die Datenbank berührt wird
   ---
-  duration_ms: 0.063458
+  duration_ms: 0.06433
   type: 'test'
   ...
 # Subtest: Standort und Kapazität ändern: updateRoom ändert genau diese Felder; die Änderung ist per getRoom sichtbar
 ok 61 - Standort und Kapazität ändern: updateRoom ändert genau diese Felder; die Änderung ist per getRoom sichtbar
   ---
-  duration_ms: 0.678436
+  duration_ms: 0.76052
   type: 'test'
   ...
 # Subtest: POST /api/rooms legt einen Raum an; er erscheint in GET /api/rooms inklusive Standort
 ok 62 - POST /api/rooms legt einen Raum an; er erscheint in GET /api/rooms inklusive Standort
   ---
-  duration_ms: 37.465209
+  duration_ms: 36.524741
   type: 'test'
   ...
 # Subtest: POST /api/rooms mit nicht existierendem Standort wird mit 400 abgelehnt
 ok 63 - POST /api/rooms mit nicht existierendem Standort wird mit 400 abgelehnt
   ---
-  duration_ms: 6.285924
+  duration_ms: 5.059284
   type: 'test'
   ...
 # Subtest: PUT ändert Name, Standort und Kapazität; die Änderung ist über GET sichtbar
 ok 64 - PUT ändert Name, Standort und Kapazität; die Änderung ist über GET sichtbar
   ---
-  duration_ms: 25.521637
+  duration_ms: 20.744372
   type: 'test'
   ...
 # Subtest: PATCH ändert nur die übergebenen Felder
 ok 65 - PATCH ändert nur die übergebenen Felder
   ---
-  duration_ms: 17.173007
+  duration_ms: 15.172822
   type: 'test'
   ...
 # Subtest: PATCH mit leerem Körper lässt den Raum unverändert
 ok 66 - PATCH mit leerem Körper lässt den Raum unverändert
   ---
-  duration_ms: 9.271554
+  duration_ms: 12.872678
   type: 'test'
   ...
 # Subtest: Änderung auf einen nicht existierenden Standort wird mit 400 abgelehnt
 ok 67 - Änderung auf einen nicht existierenden Standort wird mit 400 abgelehnt
   ---
-  duration_ms: 11.84847
+  duration_ms: 15.694171
   type: 'test'
   ...
 # Subtest: PUT/PATCH auf unbekannte Raum-ID liefert 404 mit Fehlermeldung
 ok 68 - PUT/PATCH auf unbekannte Raum-ID liefert 404 mit Fehlermeldung
   ---
-  duration_ms: 5.069155
+  duration_ms: 6.540367
   type: 'test'
   ...
 # Subtest: GET /api/rooms/available listet ausschließlich Räume ohne überschneidende Buchung
 ok 69 - GET /api/rooms/available listet ausschließlich Räume ohne überschneidende Buchung
   ---
-  duration_ms: 19.121997
+  duration_ms: 26.386208
   type: 'test'
   ...
 # Subtest: Jede Form der Überschneidung schließt den Raum aus
 ok 70 - Jede Form der Überschneidung schließt den Raum aus
   ---
-  duration_ms: 53.371928
+  duration_ms: 64.321147
   type: 'test'
   ...
 # Subtest: Direkt angrenzende Buchungen (Back-to-back) schließen den Raum nicht aus
 ok 71 - Direkt angrenzende Buchungen (Back-to-back) schließen den Raum nicht aus
   ---
-  duration_ms: 29.541655
+  duration_ms: 31.880342
   type: 'test'
   ...
 # Subtest: Nach erfolgreicher Buchung gilt der Raum für denselben Zeitraum nicht mehr als frei
 ok 72 - Nach erfolgreicher Buchung gilt der Raum für denselben Zeitraum nicht mehr als frei
   ---
-  duration_ms: 30.961654
+  duration_ms: 27.478516
   type: 'test'
   ...
 # Subtest: Fehlende oder unlesbare Zeitangaben führen zu 400 mit verständlicher Meldung
 ok 73 - Fehlende oder unlesbare Zeitangaben führen zu 400 mit verständlicher Meldung
   ---
-  duration_ms: 17.704941
+  duration_ms: 13.403451
   type: 'test'
   ...
 # Subtest: Ein leeres oder invertiertes Intervall (to <= from) wird mit 400 abgelehnt
 ok 74 - Ein leeres oder invertiertes Intervall (to <= from) wird mit 400 abgelehnt
   ---
-  duration_ms: 2.684745
+  duration_ms: 2.585949
   type: 'test'
   ...
 # Subtest: listAvailableRooms liefert die Merkmale je freiem Raum, leere Zuordnung als leere Liste
 ok 75 - listAvailableRooms liefert die Merkmale je freiem Raum, leere Zuordnung als leere Liste
   ---
-  duration_ms: 17.072939
+  duration_ms: 14.984762
   type: 'test'
   ...
 # Subtest: listAvailableRooms wirft bei ungültigen Zeitangaben einen ValidationError
 ok 76 - listAvailableRooms wirft bei ungültigen Zeitangaben einen ValidationError
   ---
-  duration_ms: 0.679949
+  duration_ms: 0.656496
   type: 'test'
   ...
 # Subtest: GET /api/health liefert Status ok
 ok 77 - GET /api/health liefert Status ok
   ---
-  duration_ms: 28.905918
+  duration_ms: 25.334097
   type: 'test'
   ...
 # Subtest: GET /api/health/ready meldet degradiert (503), wenn die DB nicht erreichbar ist
 ok 78 - GET /api/health/ready meldet degradiert (503), wenn die DB nicht erreichbar ist
   ---
-  duration_ms: 7.369639
+  duration_ms: 5.626946
   type: 'test'
   ...
 1..78
@@ -229,7 +229,7 @@ ok 78 - GET /api/health/ready meldet degradiert (503), wenn die DB nicht erreich
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 4563.604242
+# duration_ms 4490.445884
 __SCRUMY_CHECK__ test exit=0
 
 > timeless-backend@0.1.0 lint
@@ -251,27 +251,27 @@ npm run build: exit 2
 
 Ausgabe:
 ```
-… (613 Zeichen gekürzt)
-rch.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 719[2mms[22m[39m
-   [33m[2m✓[22m[39m Freie-Räume-Suche – Buchungseinstieg aus dem Treffer[2m > [22möffnet den Dialog mit Treffer-Raum und filterübernommenem Zeitraum, sendet genau diesen an POST /api/bookings und nimmt den Raum aus der aktualisierten Trefferliste [33m345[2mms[22m[39m
- [32m✓[39m test/RoomForm.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 681[2mms[22m[39m
- [32m✓[39m test/TimeGrid.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[90m 175[2mms[22m[39m
- [32m✓[39m test/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 375[2mms[22m[39m
- [32m✓[39m test/BookingStatusBadge.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[90m 52[2mms[22m[39m
- [32m✓[39m test/format.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+… (838 Zeichen gekürzt)
+h.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 642[2mms[22m[39m
+   [33m[2m✓[22m[39m Freie-Räume-Suche – Buchungseinstieg aus dem Treffer[2m > [22möffnet den Dialog mit Treffer-Raum und filterübernommenem Zeitraum, sendet genau diesen an POST /api/bookings und nimmt den Raum aus der aktualisierten Trefferliste [33m308[2mms[22m[39m
+ [32m✓[39m test/RoomForm.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 641[2mms[22m[39m
+ [32m✓[39m test/TimeGrid.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[90m 150[2mms[22m[39m
+ [32m✓[39m test/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 313[2mms[22m[39m
+ [32m✓[39m test/BookingStatusBadge.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[90m 43[2mms[22m[39m
+ [32m✓[39m test/format.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 5[2mms[22m[39m
 [90mstdout[2m | test/zz-sonner-probe.test.tsx[2m > [22m[2msonner probe[2m > [22m[2mrendert Toaster und zeigt einen Toast
 [22m[39mbody: <div><section aria-label="Notifications alt+T" tabindex="-1" aria-live="polite" aria-relevant="additions text" aria-atomic="false" data-react-aria-top-layer="true"><ol dir="" tabindex="-1" data-sonner-toaster="true" data-sonner-theme="light" data-y-position="bottom" data-x-position="right" style="--
 
- [32m✓[39m test/zz-sonner-probe.test.tsx [2m([22m[2m1 test[22m[2m)[22m[90m 91[2mms[22m[39m
- [32m✓[39m test/api/rooms.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 9[2mms[22m[39m
- [32m✓[39m test/api/bookings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 9[2mms[22m[39m
- [32m✓[39m test/no-service-name-literals.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 10[2mms[22m[39m
- [32m✓[39m test/proxy.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 252[2mms[22m[39m
+ [32m✓[39m test/zz-sonner-probe.test.tsx [2m([22m[2m1 test[22m[2m)[22m[90m 114[2mms[22m[39m
+ [32m✓[39m test/api/rooms.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 13[2mms[22m[39m
+ [32m✓[39m test/api/bookings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 23[2mms[22m[39m
+ [32m✓[39m test/no-service-name-literals.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m test/proxy.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 255[2mms[22m[39m
 
 [2m Test Files [22m [1m[32m15 passed[39m[22m[90m (15)[39m
 [2m      Tests [22m [1m[32m113 passed[39m[22m[90m (113)[39m
-[2m   Start at [22m 11:06:51
-[2m   Duration [22m 15.99s[2m (transform 413ms, setup 0ms, collect 3.37s, tests 5.72s, environment 3.94s, prepare 955ms)[22m
+[2m   Start at [22m 11:31:26
+[2m   Duration [22m 15.23s[2m (transform 410ms, setup 0ms, collect 3.23s, tests 5.28s, environment 3.75s, prepare 937ms)[22m
 
 __SCRUMY_CHECK__ test exit=0
 
