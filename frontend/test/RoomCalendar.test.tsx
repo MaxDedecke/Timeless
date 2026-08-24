@@ -19,9 +19,11 @@ import { formatDate } from "../src/lib/format";
  * gemocktem Backend (global.fetch, ausschließlich relative /api-Pfade).
  * Geprüft werden der Belegfall (Start-/Endzeit im Zeitraster, Status-Badge
  * mit semantischer Variante, freie Fenster unterscheidbar), der Leerfall
- * (Hinweisband, Gitter bleibt sichtbar), der Ladefehler (destructives Alert
- * mit „Erneut versuchen"), der unmittelbare Refetch nach dem Anlegen einer
- * Buchung sowie der clientseitige Tageswechsel ohne erneuten Request.
+ * (Hinweisband, Gitter bleibt sichtbar) samt Rückkehr ins Band beim Wechsel
+ * von einem belegten auf einen buchungsfreien Tag inklusive Neuladen über
+ * „Aktualisieren" im Band, der Ladefehler (destructives Alert mit „Erneut
+ * versuchen"), der unmittelbare Refetch nach dem Anlegen einer Buchung sowie
+ * der clientseitige Tageswechsel ohne erneuten Request.
  */
 
 const ROOM_1 = {
@@ -246,6 +248,72 @@ describe("RoomCalendar – Leerfall", () => {
     expect(
       screen.queryByTestId("timegrid-slot-booked")
     ).not.toBeInTheDocument();
+  });
+
+  it("kehrt beim Wechsel auf einen buchungsfreien Tag ins Hinweisband zurück und lässt das Gitter stehen", async () => {
+    const mock = installKalenderBackend({
+      buchungen: [buchung(heute(), "09:00", "10:00", "bestaetigt", 103)],
+    });
+    renderAt("/rooms/1");
+
+    // Ausgangslage: belegter Tag ohne Hinweisband …
+    const belegt = await screen.findByTestId("timegrid-slot-booked");
+    expect(belegt).toHaveTextContent("09:00 – 10:00");
+    expect(
+      screen.queryByTestId("timegrid-no-bookings")
+    ).not.toBeInTheDocument();
+
+    // … ein Tag weiter ist der Raum frei: dokumentierter Leerzustand als
+    // Hinweisband über dem weiterhin gezeichneten Gitter – kein stummes
+    // leeres Raster und keine falsche „Keine Räume“-Empty-Card (die wäre
+    // hier sachlich falsch, der Raum existiert ja).
+    await userEvent
+      .setup()
+      .click(screen.getByTestId("room-calendar-next-day"));
+    const hinweis = await screen.findByTestId("timegrid-no-bookings");
+    expect(hinweis).toBeVisible();
+    expect(hinweis).toHaveTextContent(
+      "Für diesen Tag sind noch keine Buchungen vorhanden"
+    );
+    const gitter = screen.getByTestId("timegrid-grid");
+    expect(gitter).toBeVisible();
+    const frei = within(gitter).getAllByTestId("timegrid-slot-free");
+    expect(frei).toHaveLength(1);
+    expect(frei[0]).toHaveTextContent("08:00 – 20:00");
+    expect(
+      screen.queryByTestId("timegrid-slot-booked")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timegrid-empty")).not.toBeInTheDocument();
+
+    // Der Tageswechsel bleibt clientseitig gefiltert: kein zweiter Abruf
+    // der Buchungsliste.
+    const abrufe = mock.mock.calls.filter(
+      (aufruf: [RequestInfo | URL, RequestInit?]) =>
+        apiUrl(aufruf[0]).startsWith("/api/bookings?roomId=")
+    );
+    expect(abrufe).toHaveLength(1);
+  });
+
+  it("lädt über „Aktualisieren“ im Hinweisband Raum und Buchungen erneut", async () => {
+    const user = userEvent.setup();
+    const mock = installKalenderBackend({ buchungen: [] });
+    renderAt("/rooms/1");
+    await screen.findByTestId("timegrid-no-bookings");
+
+    await user.click(
+      within(screen.getByTestId("timegrid-no-bookings")).getByRole("button", {
+        name: "Aktualisieren",
+      })
+    );
+
+    // Nach dem Neuladen ist der Leerzustand wieder erreicht (der Raum bleibt
+    // buchungsfrei) und die Ansicht hat beide Requests neu gestellt.
+    expect(await screen.findByTestId("timegrid-no-bookings")).toBeVisible();
+    const abrufe = mock.mock.calls.filter(
+      (aufruf: [RequestInfo | URL, RequestInit?]) =>
+        apiUrl(aufruf[0]).startsWith("/api/bookings?roomId=")
+    );
+    expect(abrufe).toHaveLength(2);
   });
 });
 
