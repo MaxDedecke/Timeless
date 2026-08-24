@@ -282,3 +282,60 @@ Mobile-first; maßgebliche Schwellen: `sm` 640, `md` 768, `lg` 1024 (Sidebar-Sch
 - **Filter:** Desktop inline über der Liste; mobil hinter „Filter"-Button in einem `Sheet`.
 - **Touch-Ziele:** auf kleinen Breiten Buttons/Zeilenaktionen mindestens `h-11` (~44 px).
 - **Formulare:** einspaltig auf Mobil, ab `sm` gruppierte Felder nebeneinander (Datum/Start/Ende), Buttons unten rechtsbündig, Primäraktion zuletzt.
+
+## Gäste-Erfassung im BookingForm
+
+Dieses Kapitel legt das UI-Muster für Anforderung 1 („Buchung für Gäste ohne eigenen Account") und ist die verbindliche Referenz für das Umsetzungsticket. Gäste sind keine Nutzer – sie werden als Teilnehmer einer Buchung erfasst, ohne eigenen Account oder Login. Die Erfassung findet ausschließlich im Buchungsdialog (Formularmuster „Dialog", siehe Kapitel „Formularmuster: Dialog vs. Route") statt, der über den Primärbutton „Raum buchen" im Raumkalender-Seitenkopf und über den Treffer-Button „Buchen" in der Freie-Räume-Suche geöffnet wird.
+
+**Felder und Layout:**
+
+- Unterhalb des Urheber-Feldes („Urheber (E-Mail)") erscheint eine Sektion **„Gäste (ohne Account)"** mit einer zusammenfassenden Beschreibung („Diese Personen erhalten keinen Login, werden aber in die Buchung aufgenommen.") und einer Schaltfläche **„Gast hinzufügen"**, die eine neue Gästezeile anlegt. Jede Zeile besteht aus zwei nebeneinander liegenden Feldern:
+  - **Name** (Placeholder: „Vorname Nachname") – Texteingabe, verbindlich.
+  - **E-Mail** (Placeholder: „name@beispiel.de") – Texteingabe, verbindlich.
+  - Jede Zeile hat eine Entfernen-Schaltfläche (Button `variant="ghost" size="sm" icon-only` mit `Trash2`-Icon aus lucide, `aria-label="Gast entfernen"`), die diese Zeile löscht.
+- Die Schaltfläche „Gast hinzufügen" gehört immer unterhalb der letzten Gästezeile, nicht unterhalb der Sektion. Bei mehr als einer Gästezeile bleibt sie dort, wo sie ist – der Dialog scrollt nicht selbst, sondern die Sektion ist Teil des fließenden Formular-Stacks (`space-y-4` wie alle anderen Sektionen im Dialog).
+- Das Feld darf leer bleiben: Keine Gäste anlegen → der Button „Gast hinzufügen" ist der einzige Inhalt der Sektion. Es gibt keinen Leerzustand mit Text, weil „keine Gäste" der erwartete Standardfall ist, nicht ein Fehler.
+
+**Dynamisches Hinzufügen und Entfernen:**
+
+- Klick auf „Gast hinzufügen" fügt eine Zeile mit leeren Name- und E-Mail-Feldern am Ende der Liste hinzu. Die neue Zeile erhält den Fokus auf das Name-Feld, damit der Nutzer direkt tippen kann.
+- Klick auf das Papierkorbsymbol einer Zeile entfernt genau diese Zeile. Es gibt keine Bestätigung – das Entfernen ist unaufwändig und sofort rückgängig machbar durch erneutes Hinzufügen.
+- Die interne Feldliste ist ein Array `gaeste: { id: number; name: string; email: string }[]` (lokaler State, `id` als Laufnummer für React-Key und als Handle für Entfernen). Jedes Öffnen des Dialogs setzt die Liste zurück (`gaeste = []`) – dieselbe Clean-on-Open-Logik wie für Urheber und Zeiten (siehe `BookingForm.tsx`).
+
+**Validierung und Fehlerdarstellung:**
+
+- **Name und E-Mail sind Pflicht:** Jede Gästezeile ohne Namen oder ohne E-Mail-Eingabe erhält bei Submit unter dem jeweiligen Feld eine rote Fehlermeldung (`text-xs text-destructive`, wie alle anderen Feldvalidierungsfehler im Formularmuster):
+  - Leeres Name-Feld: „Bitte gib den Namen des Gastes an."
+  - Leeres E-Mail-Feld: „Bitte gib die E-Mail-Adresse des Gastes an."
+- **E-Mail-Format (loosely):** Wird ein Zeichen in das E-Mail-Feld eingegeben, wird erst bei Submit geprüft, ob er ein `@` enthält – ein einfacher Check (`email.includes("@") && email.includes(".")` nach dem `@` ist optional). Fehlt das `@`, erscheint: „Bitte gib eine gültige E-Mail-Adresse ein." Dies ist bewusst eine lockere Prüfung: Gäste haben keinen Account, daher ist ein strenger Regex-Filter unnötig und nervig.
+- **Keine Gäste-Fehler oben im Formular:** Fehler erscheinen pro Feld unter dem jeweiligen Gästezeilen-Feld, nicht als Alert am Anfang. Das formale BookingForm hat heute `FeldFehler` als Record mit statischen Keys – Gäste erweitern das um dynamische Keys (`guest-<id>-name`, `guest-<id>-email`) im gleichen Pattern.
+- **Submit-Verhalten:** Erfüllt eine Gästezeile die Pflichtfelder nicht, bricht der Submit mit den Feldfehlern ab, ohne POST zu senden (dieselbe Logik wie für Datum/Zeit/Urheber) – aber: einzelne leere Zeilen (noch kein Name eingegeben) zählen nicht als fehlerhaft, wenn der Nutzer eine Zeile hinzugefügt hat, um sie dann doch nicht auszufüllen. Konkret: Eine komplett leere Zeile (Name und E-Mail beide leer) wird ignoriert statt als Fehler gewertet – nur halb- oder falsch ausgefüllte Zeilen blockieren.
+
+**API und Datenmodell (Vorbereitung für Anforderung 17):**
+
+- Der `BookingInput` (siehe `backend/src/services/bookings.ts`) wird um ein optionales Feld `guests?: GuestInput[]` erweitert, wobei `GuestInput = { name: string; email: string }`.
+- Das `Booking`-Interface erweitert um `guests?: Guest[]`, wobei `Guest = { id: number; name: string; email: string }`.
+- Das Backend legt eine eigene Tabelle `booking_guests` an (Migration 004), referenziert `bookings.id` per Fremdschlüssel (`ON DELETE CASCADE`, sodass stornierte Buchungen ihre Gäste mitnehmen). Primärschlüssel ist eine eigene `id`-Spalte plus `booking_id`.
+- `BookingInput.guests` ist optional – Buchungen ohne Gäste bleiben unverändert funktionierend (dieselbe API für Raumkalender wie heute).
+- Der POST sendet das Array als `guests: [{ name, email }, ...]` im Request-Body; das Backend legt die Gäste in der Transaktion an, die bereits für die Konfliktprüfung existiert (siehe `createBooking` in `bookings.ts`).
+
+**Anzeige der erfassten Gäste:**
+
+- **Buchungsdetailansicht:** In der Detailansicht einer Buchung (spätere Route, nicht Bestandteil dieses Sprints) erscheint unter dem Urheber eine Zeile **„Gäste"** mit deren Namen und E-Mail-Adressen als `Badge` (Variante `default`/Muted, wie Ausstattungsmerkmale), jeweils mit `Users`-Icon. Ohne Gäste wird die Zeile weggelassen – kein Leerzustand.
+- **Kalender-Slot (TimeGrid):** Der Buchungsblock im TimeGrid (`frontend/src/components/TimeGrid.tsx`) erweitert seine Kopfzeile um ein optionales `Guest`-Icon (`Users` aus lucide) mit der Anzahl der Gäste als Badge (`bg-muted text-muted-foreground`, `h-5 px-1.5 rounded-full`, `tabular-nums`), ersichtlich direkt nach dem Status-Badge. Ohne Gäste erscheint kein Icon/kein Badge – das Layout des Blocks bleibt unverändert. Das Icon ist rein informativ (keine Aktion), `aria-label` lautet „X Gäste"".
+
+**Leerzustand ohne Gäste:**
+
+- Die Gäste-Sektion im BookingForm beginnt immer leer (keine Zeilen), der Button „Gast hinzufügen" ist der einzige Inhalt. Es gibt keinen separaten Leerzustand mit Text oder Icon – „keine Gäste" ist kein Fehler, sondern der normale Fall.
+- Im Kalender-Slot und in der Detailansicht wird bei `guests.length === 0` die Gäste-Anzeige komplett ausgeblendet.
+
+**Responsive-Verhalten:**
+
+- Die Gäste-Sektion im BookingDialog bleibt auch auf schmalen Breiten lesbar: Name- und E-Mail-Feld stapeln vertikal (`space-y-2` innerhalb einer Zeile statt nebeneinander), der Papierkorbschalter bleibt am rechten Rand der Zeile. Der Dialog selbst scrollt bei Bedarf (`max-h-[90vh]` über `DialogContent`, wie shadcn-Standard).
+- Touch-Ziele („Gast hinzufügen", Papierkorbschalter) auf kleinen Breiten mindestens `h-11` (~44 px).
+
+**Zusammenhang mit anderen Mustern:**
+
+- Der Gäste-Teil folgt exakt dem Formular-Muster aus „Formularmuster: Dialog vs. Route": derselbe `inputClass`, dieselben Fehlerstile (klein und rot unter dem Feld), dieselbe Logik, dass `speicherFehler` beim nächsten Submit sofort entfernt wird (bereits implementiert in `BookingForm.tsx`).
+- Die Gäste-Sektion ist eine Ergänzung des BookingForm, keine neue Komponente – die existierende Komponente `frontend/src/pages/BookingForm.tsx` wird um den Gäste-State und die dynamischen Felder erweitert, nicht durch eine neue Seite ersetzt.
+- Die POST-Anfrage erweitert das bestehende `BookingInput` um `guests`; der Erfolgsfall, Konflikt (409) und Validierungsfehler (400) bleiben unverändert – Gäste sind eine optionale Ergänzung zur Kernbuchung.
