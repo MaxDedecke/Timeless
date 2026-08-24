@@ -14,9 +14,10 @@ import App from "../src/App";
 
 /**
  * Tests für das App-Shell: Sidebar (Desktop sichtbar, mobil einklappbar,
- * aktiver Menüpunkt markiert), Redirect der Wurzelroute „/“ auf die
- * Raumliste (/rooms – kein Systemstatus-Platzhalter mehr) und Verdrahtung
- * der Raumliste unter /rooms. Das Backend wird über global.fetch gemockt –
+ * aktiver Menüpunkt markiert – inklusive des Punkts „Freie Räume“ für die
+ * Suchroute /free), Redirect der Wurzelroute „/“ auf die Raumliste
+ * (/rooms – kein Systemstatus-Platzhalter mehr) und Verdrahtung der
+ * Raumliste unter /rooms. Das Backend wird über global.fetch gemockt –
  * der Test prüft zugleich, dass der Client ausschließlich relative
  * /api-Pfade aufruft.
  */
@@ -52,6 +53,14 @@ function mockBackend(rooms?: { status?: number; body?: unknown }) {
           : input.url;
     if (url === "/api/rooms") {
       return jsonResponse(rooms?.body ?? [], rooms?.status ?? 200);
+    }
+    // Suchseite (/free): Merkmalskatalog + Available-Abruf mit beliebigem
+    // Filterzeitraum (die konkrete Query prüft der RoomSearch-Test).
+    if (url === "/api/amenities") {
+      return jsonResponse([]);
+    }
+    if (url.startsWith("/api/rooms/available?")) {
+      return jsonResponse(rooms?.body ?? []);
     }
     throw new Error(`Unerwarteter Fetch: ${url}`);
   });
@@ -148,6 +157,65 @@ describe("App-Shell", () => {
     );
   });
 
+  it("listet den Menüpunkt Freie Räume zwischen Räume und Tagesansicht", async () => {
+    global.fetch = mockBackend({ body: ROOMS });
+    window.history.pushState({}, "", "/free");
+    render(<App />);
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Hauptnavigation",
+    });
+
+    // Konzept „Navigation“, Gruppe Buchen: Räume – Freie Räume – Tagesansicht.
+    const freieLink = within(nav).getByRole("link", { name: "Freie Räume" });
+    expect(freieLink).toHaveAttribute("href", "/free");
+    const navLinks = within(nav).getAllByRole("link");
+    expect(navLinks.map((link) => link.textContent)).toEqual([
+      "Räume",
+      "Freie Räume",
+      "Tagesansicht",
+    ]);
+  });
+
+  it("markiert unter /free den Menüpunkt Freie Räume als aktiv und die Suchseite lädt", async () => {
+    const backend = mockBackend({ body: [] });
+    global.fetch = backend;
+    window.history.pushState({}, "", "/free");
+    render(<App />);
+
+    // Gleiche Markierungslogik wie beim end-losen „Räume“-NavLink:
+    // aria-current="page" (Konzept „Aktiver Punkt“).
+    const nav = await screen.findByRole("navigation", {
+      name: "Hauptnavigation",
+    });
+    const freieLink = within(nav).getByRole("link", { name: "Freie Räume" });
+    await waitFor(() =>
+      expect(freieLink).toHaveAttribute("aria-current", "page")
+    );
+
+    // Die Nachbarpunkte sind nicht aktiv.
+    expect(
+      within(nav).getByRole("link", { name: "Räume" })
+    ).not.toHaveAttribute("aria-current");
+    expect(
+      within(nav).getByRole("link", { name: "Tagesansicht" })
+    ).not.toHaveAttribute("aria-current");
+
+    // Die Ansicht dahinter steht: Available-Abruf mit dem Default-Zeitraum
+    // (heute, 08:00–18:00 UTC) über den relativen /api-Pfad; leeres Ergebnis
+    // als EmptyState.
+    const tag = new Date().toISOString().slice(0, 10);
+    const query = new URLSearchParams({
+      from: `${tag}T08:00:00Z`,
+      to: `${tag}T18:00:00Z`,
+    }).toString();
+    expect(backend).toHaveBeenCalledWith(
+      `/api/rooms/available?${query}`,
+      expect.anything()
+    );
+    expect(await screen.findByTestId("search-empty")).toBeInTheDocument();
+  });
+
   it("klappt die Sidebar auf schmalen Breiten aus und schließt sie per Menüpunkt", async () => {
     const user = userEvent.setup();
     global.fetch = mockBackend({ body: ROOMS });
@@ -162,6 +230,18 @@ describe("App-Shell", () => {
     await user.click(trigger);
     const panel = screen.getByTestId("mobile-sidebar");
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    // Der Off-Canvas führt dieselben Punkte wie die Desktop-Sidebar –
+    // inklusive des neuen Such-Einstiegs „Freie Räume“.
+    expect(
+      within(panel).getByRole("link", { name: "Räume" })
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByRole("link", { name: "Freie Räume" })
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByRole("link", { name: "Tagesansicht" })
+    ).toBeInTheDocument();
 
     // … und schließt wieder bei Auswahl eines Menüpunkts.
     await user.click(within(panel).getByRole("link", { name: "Räume" }));
