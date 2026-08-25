@@ -166,7 +166,9 @@ describe("App-Shell", () => {
       name: "Hauptnavigation",
     });
 
-    // Konzept „Navigation“, Gruppe Buchen: Räume – Freie Räume – Tagesansicht.
+    // Konzept „Navigation“, Gruppe Buchen: Räume – Freie Räume –
+    // Tagesansicht; dahinter folgt der Verwalten-Punkt „Genehmigungen“
+    // (Genehmigungsworkflow-Route /approvals).
     const freieLink = within(nav).getByRole("link", { name: "Freie Räume" });
     expect(freieLink).toHaveAttribute("href", "/free");
     const navLinks = within(nav).getAllByRole("link");
@@ -174,6 +176,7 @@ describe("App-Shell", () => {
       "Räume",
       "Freie Räume",
       "Tagesansicht",
+      "Genehmigungen",
     ]);
   });
 
