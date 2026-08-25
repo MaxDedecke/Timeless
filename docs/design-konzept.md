@@ -169,6 +169,38 @@ Der Status einer Buchung erscheint in jeder Ansicht als dasselbe Badge – Refer
 
 Genehmigte Buchungen teilen sich bewusst den Bestätigt-Stil (Konzept: gleiche Farbe); „nicht erschienen" bleibt im neutralen Muted-Stil der default-Variante lesbar statt wie eine Ablehnung zu wirken. Ein unbekannter Statuswert wird nicht verschluckt: Er erscheint als Muted-Badge mit Rohtext, damit auffällt, dass die Zuordnung lückenhaft ist – ein neuer Statuswert bekommt zuerst hier eine Tabellenzeile und dann eine Zeile in der Komponente. Raumkalender und Tagesansicht übernehmen diese Zuordnung unverändert statt eigener Varianten.
 
+## Kalenderslot: Status- und Gäste-Badge zusammen
+
+Der Buchungsblock im TimeGrid (`frontend/src/components/TimeGrid.tsx`) trägt zwei Badge-Klassen: das Status-Badge (`BookingStatusBadge`, siehe „Buchungsstatus-Badge") und den Gäste-Hinweis aus dem Kapitel „Gäste-Erfassung im BookingForm". Dieses Kapitel legt verbindlich fest, wie beide im selben Slot zusammenspielen – Referenz-Anatomie ist der bestehende Slot, wie ihn Raumkalender und Tagesansicht heute rendern (einschließlich der No-Show-Darstellung). Die kommende Gäste-Umsetzung baut in genau diese Anatomie ein, statt einen zweiten Slot zu erzeugen.
+
+**Ein Slot, ein Badge-Inventar.** Beide Badges sind shadcn/ui-`Badge` aus `ui/badge.tsx` in derselben Größe (`text-xs font-medium`) mit dem Slot-eigenen `gap-2`-Abstand; das Gäste-Badge nutzt die default-Variante (Muted) wie Ausstattungsmerkmale und die Gäste-Anzeige der Detailansicht. Es gibt kein zweites Badge-Muster und keine slot-eigene Badge-Komponente; die Status-Zuordnung bleibt unverändert wie in „Buchungsstatus-Badge".
+
+**Feste Reihenfolge** in der rechten Slot-Gruppe (`ml-auto flex flex-wrap items-center justify-end gap-2`), von links nach rechts:
+
+1. Check-in-Fehlermeldung, falls vorhanden (eigene Zeile, `role="alert"` – adressierbare Fehler zuerst, Konzept „Fehleranzeige").
+2. **Status-Badge** – steht bei allen Slot-Varianten vor den Gäste-Badges, denn der Status bestimmt Bedeutung und Farbwelt des Blocks.
+3. **Gäste-Badges** direkt dahinter (Kürzung siehe unten).
+4. **Check-in-Button** zuletzt – die Aktion schließt die Reihe ab, gleichgültig, welche Badges vorhanden sind; sein Sichtbarkeitsfenster ändert sich durch Gäste nicht.
+
+Die Gäste-Anzeige ist rein informativ (keine Schaltfläche, kein Dialog-Aufruf, `aria-label` „X Gäste") und ändert nichts am Block-Stil: Ob ein Slot im Beleg-Stil oder – bei „nicht erschienen" – im freien Stil steht, entscheidet allein der Status. Ein freigegebener No-Show-Slot zeigt seine Gäste weiterhin, denn die Buchung bleibt als Eintrag des Tages erhalten (Beschluss vom 21.8.2026).
+
+**Kürzung der Gäste.** Grundlage ist `booking.guests`; „keine Gäste" ist der Normalfall:
+
+- **Ohne Gäste:** kein Icon, kein Badge – der Slot sieht exakt aus wie heute.
+- **Ein bis zwei Gäste:** je Gast ein eigener Name-Badge (default/Muted) hinter dem Status-Badge, das erste mit `Users`-Icon aus lucide; die Namen sind damit unmittelbar lesbar.
+- **Ab drei Gästen:** statt einer Namenskette genau EIN kompaktes Zähl-Badge „+N" mit der Gesamtzahl (`Users`-Icon plus `tabular-nums`), damit die Slot-Zeile nicht zur Liste wird. Die vollständigen Namen stehen im `aria-label`-Träger als „X Gäste" und in der Buchungsdetailansicht.
+
+Diese Präzisierung geht an dieser Stelle über die Kurzskizze im Gäste-Kapitel hinaus (dort Icon plus reine Anzahl); im Zweifelsfall gilt dieses Kapitel für den Slot.
+
+**Schmale Breiten.** Es gilt der bestehende Responsive-Standard, ohne Sonderregeln für Badges:
+
+- Die Slot-Zeile bricht mit `flex-wrap` und `gap-y-1` um; Badges werden niemals abgeschnitten, verkleinert oder per `truncate` beschnitten – notfalls rutscht die gesamte Badge-Reihe unter die Zeitangaben.
+- Kein horizontales Scrollen pro Slot und keine Mindestbreite je Slot: Raumkalender und Tagesansicht ordnen ihre Spuren über das bestehende Raster (`grid-cols-1` → `md:grid-cols-2` → `xl:grid-cols-3`), Slots laufen innerhalb ihrer Raum-Card untereinander.
+- Badges sind reine Info-Elemente und damit keine Touch-Ziele; die `h-11`-Touch-Regel auf schmalen Breiten gilt weiterhin nur für den Check-in-Button.
+- Wegen der einheitlichen Badge-Größe bleibt die Slot-Zeile innerhalb der Mindest-Slothöhe (44 px) einzeilig; ein Umbruch durch sehr viele Badges darf sie erhöhen – das ist lesbarer als jede Ellipsen-Kürzung.
+
+**Geltungsbereich.** Die Regeln liegen einmal im TimeGrid, nicht je Ansicht: Raumkalender (eine Spur) und Tagesansicht (eine Spur je Raum) erben sie automatisch, ebenso die spätere Zeilenvariante in „Meine Buchungen".
+
 ## Check-in & No-Show
 
 Adressaten dieses Kapitels sind die Umsetzungs-Tickets zu Anforderung 1 (Check-in für die laufende eigene Buchung) und Anforderung 2 (automatische Freigabe bei No-Show) sowie später „Meine Buchungen". Wer den Status wechselt, ist geklärt: Das Backend setzt `eingecheckt` beim Check-in und `nicht erschienen` beim Freigabe-Lauf (Beschluss vom 21.8.2026: Die Buchung bleibt als „nicht erschienen" erhalten, sie wird nicht gelöscht) – die Oberfläche erfindet keinen Zustand, sie rendert ihn. Referenz-Platzierung aller folgenden Regeln ist der Buchungsblock im gemeinsamen TimeGrid (`frontend/src/components/TimeGrid.tsx`); weil Raumkalender (`/rooms/:id`) und Tagesansicht (`/day`) dasselbe Raster speisen, gelten sie damit in beiden Ansichten automatisch und gleichartig.
