@@ -4,10 +4,12 @@ import {
   Check,
   Inbox,
   RotateCw,
+  Users,
 } from "lucide-react";
 
 import BookingStatusBadge from "./BookingStatusBadge";
 import { cn } from "../lib/utils";
+import { Badge } from "./ui/badge";
 import { formatTime } from "../lib/format";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
@@ -65,6 +67,13 @@ export interface TimeGridBooking {
    * Frontend ohne separates Config-Request die Frist kennt.
    */
   noShowAfterMinutes?: number;
+  /**
+   * Erfasste Gäste der Buchung (Anforderung „Buchung für Gäste ohne eigenen
+   * Account") – rein informativ im Slot (Konzept „Kalenderslot: Status- und
+   * Gäste-Badge zusammen"). Ohne Angabe oder mit leerer Liste erscheint
+   * keine Gäste-Anzeige – der Slot sieht exakt aus wie heute.
+   */
+  guests?: { name: string; email: string }[];
   /** Wird vor dem Absenden des Check-ins gesetzt: Spinner statt Icon. */
   checkingIn?: boolean;
 }
@@ -284,6 +293,44 @@ const HOUR_PX = 48;
 /** Mindesthöhe eines Slots: eine Inhaltszeile (Badge/Label) muss passen. */
 const MIN_SLOT_HEIGHT_PX = 44;
 
+/**
+ * Gäste-Anzeige im Kalenderslot (Konzept „Kalenderslot: Status- und
+ * Gäste-Badge zusammen"): rein informativ, kein Dialog-Aufruf.
+ *
+ * – Ohne Gäste: kein Icon, kein Badge – der Slot sieht exakt aus wie heute.
+ * – 1–2 Gäste: je Gast ein eigener Name-Badge (default/Muted), das erste mit
+ *   dem Users-Icon; die Namen sind unmittelbar lesbar.
+ * – Ab 3 Gästen: genau EIN kompaktes Zähl-Badge „+N" (Users-Icon plus
+ *   tabular-nums), damit die Slot-Zeile nicht zur Namenskette wird.
+ *
+ * Der Träger trägt `aria-label` = „X Gäste" und listet die vollständigen
+ * Namen im Titel (Tooltip); Badges sind Info-Elemente ohne Touch-Pflicht.
+ */
+function GaesteBadges({ gaeste }: { gaeste: { name: string }[] }) {
+  if (gaeste.length === 0) return null;
+  const label = `${gaeste.length} ${gaeste.length === 1 ? "Gast" : "Gäste"}`;
+  const namen = gaeste.map((g) => g.name).join(", ");
+  return (
+    <span aria-label={label} title={namen} data-testid="timegrid-guests">
+      {gaeste.length <= 2 ? (
+        gaeste.map((gast, index) => (
+          <Badge key={index} variant="default">
+            {index === 0 && (
+              <Users className="mr-1 h-3 w-3" aria-hidden="true" />
+            )}
+            {gast.name}
+          </Badge>
+        ))
+      ) : (
+        <Badge variant="default">
+          <Users className="mr-1 h-3 w-3" aria-hidden="true" />
+          <span className="tabular-nums">+{gaeste.length}</span>
+        </Badge>
+      )}
+    </span>
+  );
+}
+
 interface FreeSlotProps {
   slot: TimeGridSlot;
 }
@@ -437,6 +484,10 @@ function BookedSlot({
           </span>
         )}
         <BookingStatusBadge status={booking.status ?? "bestaetigt"} />
+        {/* Gäste-Badges direkt hinter dem Status-Badge – auch ein
+            no-show-freigegebener Slot zeigt seine Gäste weiter, denn die
+            Buchung bleibt als Eintrag des Tages erhalten (Konzept). */}
+        <GaesteBadges gaeste={booking.guests ?? []} />
         {kannEinchecken && (
           <Button
             type="button"

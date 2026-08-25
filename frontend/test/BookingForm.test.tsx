@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -39,6 +39,8 @@ interface MockBuchung {
   startsAt: string;
   endsAt: string;
   status: string;
+  /** Gäste der Buchung (Anforderung „Buchung für Gäste ohne eigenen Account“). */
+  guests?: { name: string; email: string }[];
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -191,6 +193,226 @@ describe("BookingForm – Erfolgsfall", () => {
       apiUrl(pfad).startsWith("/api/bookings?roomId=1")
     );
     expect(listenAbrufe.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("erfasst Gäste ohne Registrierung und sendet sie als guests-Array mit der Buchung (Anforderung „Buchung für Gäste ohne eigenen Account“)", async () => {
+    const user = userEvent.setup();
+    const tag = heute();
+    const liste: MockBuchung[] = [];
+    let gesendeteGaeste: unknown = "noch nicht gesendet";
+
+    const mock = installBackend({
+      buchungen: liste,
+      onCreate: (koerper) => {
+        // Der Mock spiegelt exakt wider, was ankommt: Nur so sieht der Test,
+        // ob das Formular die Gäste wirklich über die Leitung schickt. Der
+        // gespeicherte Datensatz trägt die Gäste (so wie es das Backend nach
+        // Migration 004 tun wird) und geht in die Liste, aus der der
+        // Refetch des Kalenders speist – genau deshalb erscheint die
+        // Buchung danach MIT Gästen-Badges im Gitter.
+        gesendeteGaeste = koerper.guests;
+        const gespeichert: MockBuchung = {
+          id: 301,
+          roomId: Number(koerper.roomId),
+          createdBy: String(koerper.createdBy),
+          startsAt: String(koerper.startsAt),
+          endsAt: String(koerper.endsAt),
+          status: "bestaetigt",
+          guests: koerper.guests as { name: string; email: string }[],
+        };
+        liste.push(gespeichert);
+        return jsonResponse(gespeichert, 201);
+      },
+    });
+    global.fetch = mock as unknown as typeof global.fetch;
+
+    renderAt("/rooms/1");
+    await screen.findByTestId("room-book-button");
+    await user.click(screen.getByTestId("room-book-button"));
+    await screen.findByTestId("booking-dialog");
+
+    fireEvent.change(screen.getByTestId("booking-date"), {
+      target: { value: tag },
+    });
+    fireEvent.change(screen.getByTestId("booking-start"), {
+      target: { value: "09:00" },
+    });
+    fireEvent.change(screen.getByTestId("booking-end"), {
+      target: { value: "10:00" },
+    });
+    await user.type(screen.getByTestId("booking-createdby"), "mitarbeiter@example.com");
+
+    // Zwei Gäste erfassen – beide ohne jegliche Registrierung im System.
+    await user.click(screen.getByTestId("booking-guest-add"));
+    await user.type(screen.getByTestId("booking-guest-1-name"), "Frida Lang");
+    await user.type(
+      screen.getByTestId("booking-guest-1-email"),
+      "frida@gast.example.org"
+    );
+    await user.click(screen.getByTestId("booking-guest-add"));
+    await user.type(screen.getByTestId("booking-guest-2-name"), "Tom Reuter");
+    await user.type(
+      screen.getByTestId("booking-guest-2-email"),
+      "tom@gast.example.org"
+    );
+
+    await user.click(screen.getByTestId("booking-submit"));
+
+    // Dialog zu, Buchung im Kalender …
+    const belegt = await screen.findByTestId("timegrid-slot-booked");
+    expect(belegt).toHaveTextContent("09:00 – 10:00");
+    // … und die erfassten Gäste sind in der gespeicherten Buchung sichtbar:
+    // 2 Namens-Badges hinter dem Status-Badge.
+    const gastAnzeige = within(belegt).getByTestId("timegrid-guests");
+    expect(gastAnzeige).toHaveAttribute("aria-label", "2 Gäste");
+    expect(within(gastAnzeige).getByText("Frida Lang")).toBeInTheDocument();
+    expect(within(gastAnzeige).getByText("Tom Reuter")).toBeInTheDocument();
+
+    // Auf der Leitung ging genau das erfasste Array.
+    expect(gesendeteGaeste).toEqual([
+      { name: "Frida Lang", email: "frida@gast.example.org" },
+      { name: "Tom Reuter", email: "tom@gast.example.org" },
+    ]);
+  });
+
+  it("belässt den leeren Gästefall beim bisherigen Vertrag: keine Zeile, kein guests-Feld im POST", async () => {
+    const user = userEvent.setup();
+    const tag = heute();
+    const liste: MockBuchung[] = [];
+
+    const mock = installBackend({
+      buchungen: liste,
+      onCreate: (koerper) => {
+        // Buchung OHNE Gäste speichern und in die Liste stellen, aus der der
+        // Refetch des Kalenders speist – so ist der Slot danach sichtbar.
+        const gespeichert: MockBuchung = {
+          id: 302,
+          roomId: Number(koerper.roomId),
+          createdBy: String(koerper.createdBy),
+          startsAt: String(koerper.startsAt),
+          endsAt: String(koerper.endsAt),
+          status: "bestaetigt",
+        };
+        liste.push(gespeichert);
+        return jsonResponse(gespeichert, 201);
+      },
+    });
+    global.fetch = mock as unknown as typeof global.fetch;
+
+    renderAt("/rooms/1");
+    await screen.findByTestId("timegrid-no-bookings");
+    await oeffneUndFuelle(user, { datum: tag });
+
+    const belegt = await screen.findByTestId("timegrid-slot-booked");
+    // Keine Gäste erfasst → keine Gäste-Anzeige am Slot …
+    expect(
+      within(belegt).queryByTestId("timegrid-guests")
+    ).not.toBeInTheDocument();
+    const posts = mock.mock.calls.filter(
+      ([pfad, init]) => apiUrl(pfad) === "/api/bookings" && init?.method === "POST"
+    );
+    expect(posts).toHaveLength(1);
+    const koerper = JSON.parse(String(posts[0]?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(koerper).toEqual({
+      roomId: 1,
+      startsAt: `${tag}T09:00:00Z`,
+      endsAt: `${tag}T10:00:00Z`,
+      createdBy: "mitarbeiter@example.com",
+    });
+    expect("guests" in koerper).toBe(false);
+  });
+
+  it("ignoriert eine komplett leere Gästezeile und blockiert nur halb ausgefüllte Zeilen mit Feldfehlern", async () => {
+    const user = userEvent.setup();
+    const liste: MockBuchung[] = [];
+
+    const mock = installBackend({
+      buchungen: liste,
+      onCreate: () => jsonResponse({ id: 303, status: "bestaetigt" }, 201),
+    });
+    global.fetch = mock as unknown as typeof global.fetch;
+
+    renderAt("/rooms/1");
+    await screen.findByTestId("room-book-button");
+    await user.click(screen.getByTestId("room-book-button"));
+    await screen.findByTestId("booking-dialog");
+
+    fireEvent.change(screen.getByTestId("booking-date"), {
+      target: { value: heute() },
+    });
+    fireEvent.change(screen.getByTestId("booking-start"), {
+      target: { value: "09:00" },
+    });
+    fireEvent.change(screen.getByTestId("booking-end"), {
+      target: { value: "10:00" },
+    });
+    await user.type(screen.getByTestId("booking-createdby"), "mitarbeiter@example.com");
+
+    // Zeile 1 bleibt KOMPLETT leer (Name UND E-Mail) – sie wird ignoriert,
+    // nicht als Fehler gewertet (Konzept „Submit-Verhalten“).
+    await user.click(screen.getByTestId("booking-guest-add"));
+    // Zeile 2 ist halb gefüllt: nur Name, keine E-Mail.
+    await user.click(screen.getByTestId("booking-guest-add"));
+    await user.type(screen.getByTestId("booking-guest-2-name"), "Nur Name");
+
+    await user.click(screen.getByTestId("booking-submit"));
+
+    // Nur Zeile 2 blockiert – unter dem jeweiligen Feld, kein Alert oben.
+    expect(
+      screen.getByTestId("booking-guest-2-email-error")
+    ).toHaveTextContent("Bitte gib die E-Mail-Adresse des Gastes an.");
+    expect(
+      screen.queryByTestId("booking-guest-1-name-error")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("booking-guest-1-email-error")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("booking-dialog")).toBeInTheDocument();
+
+    const posts = mock.mock.calls.filter(
+      ([pfad, init]) => apiUrl(pfad) === "/api/bookings" && init?.method === "POST"
+    );
+    expect(posts).toHaveLength(0);
+  });
+
+  it("prüft die E-Mail der Gästezeile locker: fehlendes @ erscheint als Feldfehler", async () => {
+    const user = userEvent.setup();
+    const mock = installBackend({ buchungen: [] });
+    global.fetch = mock as unknown as typeof global.fetch;
+
+    renderAt("/rooms/1");
+    await screen.findByTestId("room-book-button");
+    await user.click(screen.getByTestId("room-book-button"));
+    await screen.findByTestId("booking-dialog");
+
+    fireEvent.change(screen.getByTestId("booking-start"), {
+      target: { value: "09:00" },
+    });
+    fireEvent.change(screen.getByTestId("booking-end"), {
+      target: { value: "10:00" },
+    });
+    await user.type(screen.getByTestId("booking-createdby"), "mitarbeiter@example.com");
+    await user.click(screen.getByTestId("booking-guest-add"));
+    await user.type(screen.getByTestId("booking-guest-1-name"), "Ohne Klammeraffe");
+    await user.type(screen.getByTestId("booking-guest-1-email"), "keine-mail");
+
+    await user.click(screen.getByTestId("booking-submit"));
+
+    // Lockere Prüfung (Konzept): Nur das fehlende „@" zählt als Fehler –
+    // unter dem Feld, nicht als Alert, und ohne POST.
+    expect(
+      screen.getByTestId("booking-guest-1-email-error")
+    ).toHaveTextContent("Bitte gib eine gültige E-Mail-Adresse ein.");
+    expect(
+      screen.queryByTestId("booking-save-error")
+    ).not.toBeInTheDocument();
+    const posts = mock.mock.calls.filter(
+      ([pfad, init]) => apiUrl(pfad) === "/api/bookings" && init?.method === "POST"
+    );
+    expect(posts).toHaveLength(0);
   });
 
   it("öffnet den Dialog mit dem gewählten Kalendertag vorausgefüllt und prüft Pflichtfelder clientseitig", async () => {

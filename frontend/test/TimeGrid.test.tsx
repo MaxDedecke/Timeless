@@ -213,6 +213,125 @@ describe("TimeGrid – Slot-Darstellung", () => {
   });
 });
 
+describe("TimeGrid – Gäste-Badges im Slot (Konzept „Kalenderslot: Status- und Gäste-Badge zusammen“)", () => {
+  it("zeigt bei ein bis zwei Gästen je Gast ein Namens-Badge hinter dem Status-Badge, das erste mit Users-Icon", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 120,
+              start: "09:00",
+              end: "10:00",
+              status: "bestaetigt",
+              guests: [
+                { name: "Frida Lang", email: "frida@gast.example.org" },
+                { name: "Tom Reuter", email: "tom@gast.example.org" },
+              ],
+            },
+          ]),
+        ]}
+      />
+    );
+
+    const slot = screen.getByTestId("timegrid-slot-booked");
+    const gaeste = within(slot).getByTestId("timegrid-guests");
+    // Rein informativ, für Screenreader als Anzahl statt Namenskette.
+    expect(gaeste).toHaveAttribute("aria-label", "2 Gäste");
+    // Namen unmittelbar lesbar, Reihenfolge erhalten.
+    expect(within(gaeste).getByText("Frida Lang")).toBeInTheDocument();
+    expect(within(gaeste).getByText("Tom Reuter")).toBeInTheDocument();
+    // Muted-Stil der default-Variante wie Ausstattungsmerkmale.
+    expect(within(gaeste).getAllByText(/Frida|Tom/)[0]).toHaveClass("bg-muted");
+  });
+
+  it("kürzt ab drei Gästen auf genau EIN Zähl-Badge „+N“ mit tabular-nums", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 121,
+              start: "11:00",
+              end: "12:00",
+              status: "bestaetigt",
+              guests: [
+                { name: "Frida Lang", email: "f@example.org" },
+                { name: "Tom Reuter", email: "t@example.org" },
+                { name: "Mara Vogel", email: "m@example.org" },
+                { name: "Ivo Sandmann", email: "i@example.org" },
+              ],
+            },
+          ]),
+        ]}
+      />
+    );
+
+    const slot = screen.getByTestId("timegrid-slot-booked");
+    const gaeste = within(slot).getByTestId("timegrid-guests");
+    expect(gaeste).toHaveAttribute("aria-label", "4 Gäste");
+    // Keine Namenskette mehr – nur das kompakte Zähl-Badge.
+    expect(within(gaeste).queryByText("Frida Lang")).not.toBeInTheDocument();
+    const zaehler = within(gaeste).getByText("+4");
+    expect(zaehler).toHaveClass("tabular-nums");
+  });
+
+  it("blendet bei fehlenden oder leeren Gästen die Anzeige komplett aus – der Slot sieht exakt aus wie heute", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            { id: 122, start: "09:00", end: "10:00", status: "bestaetigt" },
+            {
+              id: 123,
+              start: "11:00",
+              end: "12:00",
+              status: "bestaetigt",
+              guests: [],
+            },
+          ]),
+        ]}
+      />
+    );
+
+    // Weder undefined noch leeres Array darf eine Anzeige erzeugen.
+    expect(screen.queryByTestId("timegrid-guests")).not.toBeInTheDocument();
+    const slots = screen.getAllByTestId("timegrid-slot-booked");
+    for (const slot of slots) {
+      expect(slot).toHaveTextContent("Bestätigt");
+    }
+  });
+
+  it("zeigt die Gäste auch an einem no-show-freigegebenen Slot weiter (Eintrag bleibt Teil des Tages)", () => {
+    render(
+      <TimeGrid
+        onRetry={() => {}}
+        lanes={[
+          lane(1, "Atelier Nord", [
+            {
+              id: 124,
+              start: "09:00",
+              end: "10:00",
+              status: "nicht erschienen",
+              guests: [{ name: "Frida Lang", email: "f@example.org" }],
+            },
+          ]),
+        ]}
+      />
+    );
+
+    const slot = screen.getByTestId("timegrid-slot-booked");
+    expect(slot).toHaveClass("bg-muted");
+    const gaeste = within(slot).getByTestId("timegrid-guests");
+    expect(gaeste).toHaveAttribute("aria-label", "1 Gast");
+    expect(within(gaeste).getByText("Frida Lang")).toBeInTheDocument();
+    expect(within(slot).getByText("Nicht erschienen")).toBeInTheDocument();
+  });
+});
+
 describe("TimeGrid – Spuren", () => {
   it("ordnet bei mehreren Spuren jede Buchung ihrer eigenen Spur zu", () => {
     render(

@@ -89,6 +89,31 @@ describe("bookings API-Client", () => {
     expect(created).toEqual(sampleBooking);
   });
 
+  it("createBooking überträgt erfasste Gäste als guests-Array im JSON-Body (Anforderung „Buchung für Gäste ohne eigenen Account“)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(sampleBooking, 201));
+
+    const gaeste = [
+      { name: "Frida Lang", email: "frida@gast.example.org" },
+      { name: "Tom Reuter", email: "tom@gast.example.org" },
+    ];
+    const input = {
+      roomId: 7,
+      startsAt: "2026-08-25T09:05:00Z",
+      endsAt: "2026-08-25T10:30:00Z",
+      createdBy: "mitarbeiter@example.com",
+      guests: gaeste,
+    };
+    const created = await createBooking(input);
+
+    // Vertrag laut Konzept „API und Datenmodell": das Array geht unverändert
+    // als `guests: [{ name, email }, …]` in den Request-Body.
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/bookings");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual(input);
+    expect(created).toEqual(sampleBooking);
+  });
+
   it("lehnt mit ApiError samt Status ab, wenn die API einen Fachfehler liefert", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ error: "Raum nicht gefunden." }, 404)

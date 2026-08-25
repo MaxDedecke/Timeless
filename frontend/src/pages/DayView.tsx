@@ -349,6 +349,9 @@ export default function DayView() {
         // No-Show-Frist aus der API-Antwort an TimeGrid weitergeben,
         // damit das Check-in-Fenster dynamisch statt hart an 15 Minuten ist.
         noShowAfterMinutes: buchung.noShowAfterMinutes,
+        // Gäste für die Badge-Anzeige im Slot (rein informativ); ohne Feld
+        // (alter Datenstand) erscheint keine Gäste-Anzeige.
+        guests: buchung.guests,
       })),
     }));
   }, [state, belegung]);

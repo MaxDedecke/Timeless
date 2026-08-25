@@ -8,6 +8,18 @@ import { requestJson } from "./http.js";
  * backend/src/services/bookings.ts.
  */
 
+/**
+ * Ein Gast einer Buchung (Anforderung „Buchung für Gäste ohne eigenen
+ * Account"): keine Nutzer*in, kein Login – nur Erfassungsangaben des
+ * Buchenden. Vertragsform gemäß Design-Konzept „Gäste-Erfassung im
+ * BookingForm → API und Datenmodell".
+ */
+export interface Guest {
+  id: number;
+  name: string;
+  email: string;
+}
+
 /** Eine gespeicherte Buchung in der API-Form (Zeiten als ISO-8601-UTC-Text). */
 export interface Booking {
   id: number;
@@ -18,6 +30,14 @@ export interface Booking {
   endsAt: string;
   /** Datenbank-Textwert, z. B. „bestaetigt" – Mapping via BookingStatusBadge. */
   status: string;
+  /**
+   * Erfasste Gäste der Buchung – LEER oder abwesend, wenn die Buchung ohne
+   * Gäste angelegt wurde (der Normalfall; Anzeige wird dann ausgeblendet).
+   * Solange das Backend das Feld noch nicht ausliefert (Migration 004 mit
+   * Tabelle booking_guests steht aus), bleibt es undefined – die Ansichten
+   * behandeln beide Fälle identisch.
+   */
+  guests?: Guest[];
   /**
    * No-Show-Frist in Minuten, die für diese Buchung gilt (aus der
    * System-Konfiguration): Das Check-in-Fenster im Frontend endet spätestens
@@ -33,6 +53,14 @@ export interface BookingInput {
   startsAt?: unknown;
   endsAt?: unknown;
   createdBy?: unknown;
+  /**
+   * Gäste ohne eigenen Account (Anforderung „Buchung für Gäste ohne eigenen
+   * Account"), Vertragsform gemäß Konzept „API und Datenmodell":
+   * `guests: [{ name, email }, …]`. Optional – der leere Fall sendet das Feld
+   * bewusst NICHT mit (kein leeres Array), sodass Buchungen ohne Gäste
+   * byte-identisch zum bisherigen Vertrag bleiben.
+   */
+  guests?: { name: string; email: string }[];
 }
 
 /**
