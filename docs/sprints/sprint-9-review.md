@@ -2,42 +2,36 @@
 
 ## Was geliefert wurde
 
-**No-Show-Status in beiden Kalenderansichten sichtbar** (Ben Ritter)
-Das TimeGrid rendert no-show-freigegebene Slots in Raumkalender (`/rooms/:id`) und Tagesansicht (`/day/:id`) im freien Stil (Muted-Fläche, gestrichelter Rand) inkl. Badge „Nicht erschienen" gemäß Sprint-5-Konzept – ohne Check-in-Button; bestätigt/eingecheckt bleiben unverändert. Die Badge-Variante ist unit-getestet, der Tippfehler in TimeGrid/BookingStatusBadge ist korrigiert (Commits `3eeb99bf`, `8ebe6e52`).
+**No-Show-Status in allen Kalenderansichten sichtbar** (Ben Ritter): Der Status „Nicht erschienen" wird im Raumkalender (`/rooms/:id`) und in der Tagesansicht (`/day/:id`) angezeigt – Badge im neutralen Muted-Stil gemäß Sprint-5-Konzept, no-show-freigegebene Slots im freien Stil (Muted-Fläche, gestrichelter Rand) und ohne Check-in-Button; bestätigt und eingecheckte Buchungen bleiben unverändert. Die Badge-Variante ist unit-getestet, ein veralteter App-Test wurde an den vierten Sidebar-Punkt „Genehmigungen" angleichen (Commit 8ebe6e52). Der bekannte Encoding-Tippfehler in TimeGrid/BookingStatusBadge ist behoben (Commit 3eeb99bf).
 
-**Check-in-Fenster folgt der konfigurierbaren Frist** (Frida Lang)
-Das hartkodierte 15-Minuten-Fenster ist ersetzt: Das Backend liest `NO_SHOW_AFTER_MINUTES` (Default 15) via config-Service und liefert `noShowAfterMinutes` in jeder Booking-Antwort; das Frontend berechnet das Sichtbarkeitsfenster daraus, mit Default-15-Fallback. Unit-Tests decken eine abweichende Frist (10 Minuten) ab. Laut Ticketergebnis laufen 131 Frontend- und 78 Backend-Tests grün.
+**Check-in-Fenster folgt der konfigurierbaren Frist** (Frida Lang): Das hartkodierte 15-Minuten-Fenster ist entfernt. Das Backend liest `NO_SHOW_AFTER_MINUTES` (Default 15) aus der Konfiguration und liefert `noShowAfterMinutes` mit jeder Buchungsantwort; das Frontend berechnet das Sichtbarkeitsfenster daraus, mit Default-Fallback. Unit-Tests decken eine abweichende Frist (10 Minuten) ab. Laut Ticketergebnis laufen 131 Frontend- und 78 Backend-Tests grün.
 
-**Design-Konzept Genehmigungsworkflow** (Ben Ritter)
-In `docs/design-konzept.md` verbindlich festgelegt: Sidebar-Punkt „Genehmigungen", Statusanzeige über BookingStatusBadge, Leer-/Lade-/Fehlerzustände, Genehmigen/Ablehnen-Bestätigungsdialog. Darüber hinaus wurden die Seite `/approvals` samt API-Client und Route bereits gebaut und im Browser ohne JavaScript-Fehler verifiziert (Commit `405b2a62`) – die Seite hat aber noch kein Backend dahinter (siehe unten).
+**Design-Konzept Genehmigungsworkflow-UI** (Ben Ritter): Verbindlich in `docs/design-konzept.md` dokumentiert – Sidebar-Punkt „Genehmigungen", Statusanzeige über BookingStatusBadge, Leer-/Lade-/Fehlerzustände, Bestätigungsdialog für Genehmigen/Ablehnen. Über das reine Konzept hinaus ist die Seite `/approvals` mit Route und API-Client umgesetzt und im Browser ohne JavaScript-Fehler erreichbar (Commit 405b2a62).
 
-**Design-Konzept Gäste-Erfassung** (Frida Lang)
-Gäste als Teilnehmer ohne Account im Buchungsdialog (Name/E-Mail, dynamisch hinzufügen/entfernen, Inline-Validierung), Anzeige in Detailansicht und als Badge im Kalenderslot, Leerzustand definiert. Dazu die Datenvorarbeit: `BookingInput.guests`, Migration 004 mit `booking_guests`-Tabelle – Basis für Anforderung 17.
+**Design-Konzept Gäste-Erfassung** (Frida Lang): Gäste ohne Account als Teilnehmer im Buchungsdialog festgelegt (Name/E-Mail, Inline-Validierung, Anzeige in Detailansicht und als Badge im Kalenderslot, Leerzustand ohne Gäste als Normalfall) – plus Vorarbeit Richtung Anforderung 17: `BookingInput.guests`, Migration 004 mit `booking_guests`-Tabelle.
 
-Automatische Ticketprüfungen: erfolgreich. **Integrationsprüfung: bestanden**, voller Stack erreichbar (Frontend, Port 33149).
+**Qualitätssicherung:** Die automatischen Prüfungen zu allen Tickets waren erfolgreich (Quinn Adler), ebenso die Integrationsprüfung des vollen Stacks (Frontend erreichbar, Port 33151).
 
 ## Was offen blieb (und warum)
 
-- **Datenmodell für die Genehmigungspflicht je Raum fehlt.** Das ist Teil des Sprintziels („… dazu steht das Datenmodell … bereit"), taucht aber in keinem Sprint-9-Ticket oder Commit auf. Es war schlicht nicht als Ticket eingeplant – das Ziel war diesbezüglich zu hoch gesteckt. Muss nachgeholt werden.
-- **Genehmigungs-Backend existiert nicht.** Die neue `/approvals`-Seite erhält von der API aktuell einen 404; im Ticketergebnis ist das als separates Backend-Ticket benannt. Die Anforderungen 13 und 14 sind funktional damit noch nicht erfüllt.
-- **Gäste-Erfassung ist nicht bedienbar.** Konzept und Datengrundlage stehen, die Umsetzung im BookingForm und an der API (Anforderung 17) folgt erst.
-- **Antwortentwurf zu den Zulieferungsfragen liegt weiterhin nicht vor.** Laut Ihrem Beschluss vom 24.8. sollte er im Sprint 8 entstehen; weder Sprint 8 noch Sprint 9 zeigen ein entsprechendes Ticket oder einen Commit. Wir ziehen ihn nach – Ihr müsst danach nur noch freigeben.
-- **Organisatorisch:** Das Ticket „No-Show-Status in Raumkalender und Tagesansicht sichtbar machen" ist doppelt im Board abgeschlossen (zweites Exemplar ohne Ergebnis-Zusammenfassung, Prüfung grün). Bekanntes Dubletten-Muster aus Sprint 6/7 – sollte wie dort bereinigt werden.
+**Datenmodell für die Genehmigungspflicht je Raum fehlt.** Das war ausdrücklich Teil des Sprintziels („… dazu steht das Datenmodell für die Genehmigungspflicht je Raum bereit"), und Ihr Beschluss vom 25.8. sagte das Grundlagen-Ticket für Sprint 9 nachziehen. Weder ein solches Ticket noch eine Lieferung existieren. Das haben wir in der Sprintplanung versäumt – dieses Zielteil ist nicht erreicht, und Anforderung 13 kann ohne diese Datenbasis nicht starten.
+
+**Genehmigungsworkflow ist nur als UI-Hülle funktionsfähig.** Die `/approvals`-Seite zeigt korrekte Zustände, aber die dahinterliegende API antwortet mit 404 – der Backend-Endpunkt für offene Anfragen sowie Genehmigen/Ablehnen fehlt. Laut Ticketergebnis als separates Backend-Ticket vorgesehen; es liegt noch nicht im Board.
+
+**Antwortentwurf zu den Zulieferungsfragen weiterhin nicht erstellt.** Zwei Ihrer Beschlüsse dazu (24.8.: „jetzt im Sprint 8 erstellen"; 25.8.: „Ticket jetzt nachziehen und Entwurf erstellen") sind unerledigt geblieben. Der Entwurf zu Testdaten-statt-realere-Raumliste und SSO-vs.-E-Mail-Login ist damit überfällig.
 
 ## Wo der Auftraggeber gefragt ist
 
-1. **Freigabe des Antwortentwurfs zu den Zulieferungsfragen** (Testdaten statt realer Raumliste; einfacher E-Mail-Login vs. SSO): Wir erstellen den Entwurf im nächsten Sprint und legen ihn Ihnen vor. Bis zu Ihrer Freigabe bleiben Login/Rollen-Anbindung blockiert.
-2. **Genehmigungspflicht:** Im Konzept steht die Zulieferfrage „grundsätzlich aktiv oder nur je Raum konfigurierbar?" weiterhin offen. Anforderung 13 beschreibt die Konfigurierbarkeit je Raum – bitte bestätigen Sie, dass damit die Entscheidung gefallen ist (keine separate Grundeinstellung nötig), bevor wir Datenmodell und Workflow bauen.
+- **Duplikat-Klärung:** „No-Show-Status in Raumkalender und Tagesansicht sichtbar machen" existiert zweimal im Sprint, das zweite Exemplar ohne Ergebniszusammenfassung. Ist es ein versehentliches Duplikat, das wir nach kurzer Prüfung (inkl. Code-Dubletten-Prüfung) schließen dürfen? Unsere Einschätzung: Ja – gleiche Konstellation wie die bereits entschiedenen Dubletten aus Sprint 3 und 6/7, das erste Exemplar trägt die vollständige Dokumentation. Bis zu Ihrer Entscheidung fassen wir das zweite Exemplar nicht an.
+- **Freigabe des Zulieferfragen-Entwurfs:** Die eigentlichen Fachentscheidungen (Testdaten statt realer Raumliste; einfacher E-Mail-Login statt SSO für den Test) bleiben laut Ihrem Beschluss vom 24.8. bei Ihnen. Sie warten darauf, dass wir den überfälligen Entwurf vorlegen (siehe oben).
 
 ## Empfehlung für den nächsten Sprint
 
-Zielvorschlag: **Die vorbereiteten Konzepte funktional machen.**
-
-- Datenmodell für Genehmigungspflicht je Raum nachziehen (Status ausstehend/genehmigt/abgelehnt, Kennzeichen am Raum) – holt den verpassten Teil des Sprint-9-Ziels nach.
-- Backend-API für den Genehmigungsworkflow (offene Anfragen listen, genehmigen/ablehnen), damit die fertige `/approvals`-Seite ihren 404 verliert.
-- Gäste-Erfassung im BookingForm auf Basis von Migration 004 umsetzen (Anforderung 17, Hoch).
-- Antwortentwurf zu den Zulieferfragen erstellen und zur Freigabe einreichen.
-- Kleinkram nebenbei: Dubletten-Exemplar „No-Show-Status" schließen; `seed-showcase.sh` endlich ins Repo aufnehmen – es existiert bislang nicht versioniert, gehört aber zum Standard, damit ein Start über Scrumy nicht mit leerer Anwendung dasteht.
+1. **Sprint-9-Rest zuerst:** Grundlagen-Ticket „Datenmodell für die Genehmigungspflicht je Raum" (Anforderung 13) – Voraussetzung für den gesamten Genehmigungsworkflow.
+2. **Backend für den Genehmigungsworkflow:** Endpunkte für offene Anfragen sowie Genehmigen/Ablehnen, damit `/approvals` über den aktuellen 404 hinaus funktioniert und Anforderungen 14/15 Ende-zu-Ende lauffähig werden.
+3. **Gäste-Erfassung umsetzen:** Die Vorarbeit aus dem Konzept-Ticket (Migration 004, `booking_guests`) nutzen und Anforderung 17 im BookingForm fertigstellen.
+4. **Zulieferfragen-Entwurf diesmal als explizites Sprint-Ticket durchziehen** und Ihnen zur Freigabe vorlegen – zwei Beschlüsse dazu sind bisher leer gelaufen.
+5. **Board bereinigen:** Nach Ihrer Entscheidung zum Duplikat dieses schließen und dabei auf Code-Dubletten prüfen.
 
 ## Anhang: Integrationsprüfung (voller Stack)
-Bestanden. Voller Stack erreichbar (Dienst „frontend", Port 33149).
+Bestanden. Voller Stack erreichbar (Dienst „frontend", Port 33151).
