@@ -42,11 +42,16 @@ before(async () => {
   locationId = loc.rows[0].id;
 });
 
-/** Legt einen frischen Raum an – je Test einer, damit sich nichts beeinflusst. */
-async function createTestRoom(name: string): Promise<number> {
+/** Legt einen frischen Raum an – je Test einer, damit sich nichts beeinflusst.
+ *  Optionaler Genehmigungspflicht-Schalter (Anforderung 13); Default false
+ *  entspricht dem Spalten-Default und lässt bestehende Aufrufe unverändert. */
+async function createTestRoom(
+  name: string,
+  requiresApproval = false
+): Promise<number> {
   const { rows } = await db.query<{ id: number }>(
-    "INSERT INTO rooms (name, location_id, capacity) VALUES ($1, $2, 8) RETURNING id::int AS id",
-    [name, locationId]
+    "INSERT INTO rooms (name, location_id, capacity, requires_approval) VALUES ($1, $2, 8, $3) RETURNING id::int AS id",
+    [name, locationId, requiresApproval]
   );
   return rows[0].id;
 }
@@ -392,26 +397,90 @@ test("findOverlappingBookings findet genau die wirklich überschneidenden Buchun
 });
 
 // ---------------------------------------------------------------------------
-// Teil 2b: Ausstehende Buchungen blockieren den Zeitraum (Halbsatz dieser
-// Story, der ohne das Flag rooms.requires_approval gilt).
+// Teil 2b: Status-Ableitung beim Anlegen (Anforderung 13) und Blockwirkung
+// ausstehender Buchungen.
 //
-// Die Konfliktprüfung wertet den Status bewusst NICHT aus – sie zählt jede
-// Buchungszeile als belegend. Damit gilt „ausstehende Buchungen blockieren"
-// bereits mit dem heutigen Stand und wird hier regressionsgesichert: Sobald
-// createBooking den Status „ausstehend" für genehmigungspflichtige Räume
-// vergibt (Abhängigkeit: Genehmigungspflicht-Flag je Raum), dürfen diese
-// Tests nicht brechen.
+// createBooking leitet den Anfangsstatus aus dem Genehmigungspflicht-Schalter
+// des Raums ab: 'ausstehend' bei requires_approval, sonst 'bestaetigt'. Die
+// Konfliktprüfung wertet den Status dabei bewusst NICHT aus – sie zählt jede
+// Buchungszeile als belegend, sodass eine ausstehende Buchung den Zeitraum
+// blockiert.
 //
 // Bewusst NICHT Teil dieses Tickets: dass eine ABGELEHNTe oder STORNIERTE
 // Buchung den Zeitraum wieder freigibt. Derzeit blockiert der Intervall-
 // Vergleich jede Zeile unabhängig vom Status; die Freigabe bei Ablehnung ist
 // Akzeptanzkriterium des Genehmigungsworkflow-Tickets und muss dort durch
 // einen Statusfilter in findOverlappingBookings ergänzt werden.
-//
-// Arrangement direkt per SQL, weil die Status-Ableitung beim Anlegen noch
-// nicht existiert – genau deshalb prüft dieser Teil nur die Blockierung,
-// nicht die Statusvergabe.
 // ---------------------------------------------------------------------------
+
+test("Buchung im genehmigungspflichtigen Raum erhält Status 'ausstehend' und blockiert den Zeitraum", async () => {
+  const roomId = await createTestRoom("Pflichtig Ausstehend", true);
+
+  const res = await request(app)
+    .post("/api/bookings")
+    .send(
+      bookingBody(roomId, "2026-10-17T10:00:00Z", "2026-10-17T11:00:00Z")
+    );
+  assert.equal(res.status, 201);
+  assert.equal(res.body.status, "ausstehend");
+
+  // Nicht nur in der Antwort: wirklich mit diesem Status persistiert.
+  assert.equal(await bookingStatus(res.body.id), "ausstehend");
+
+  // Die ausstehende Buchung belegt den Zeitraum – überschneidend wird auf
+  // Service- und API-Ebene abgelehnt.
+  const overlaps = await findOverlappingBookings(
+    db,
+    roomId,
+    new Date("2026-10-17T10:30:00Z"),
+    new Date("2026-10-17T11:30:00Z")
+  );
+  assert.equal(overlaps.length, 1);
+  assert.equal(overlaps[0].status, "ausstehend");
+
+  await assert.rejects(
+    createBooking(
+      bookingBody(roomId, "2026-10-17T10:30:00Z", "2026-10-17T11:30:00Z")
+    ),
+    (err: unknown) => {
+      assert.ok(err instanceof ConflictError);
+      assert.match((err as Error).message, /bereits gebucht/);
+      return true;
+    }
+  );
+
+  const apiRes = await request(app)
+    .post("/api/bookings")
+    .send(bookingBody(roomId, "2026-10-17T09:30:00Z", "2026-10-17T10:30:00Z"));
+  assert.equal(apiRes.status, 409);
+  assert.match(apiRes.body.error, /bereits gebucht/);
+
+  assert.equal(
+    await countBookings(roomId),
+    1,
+    "Abgelehnte Buchungsversuche dürfen keine Zeilen hinterlassen"
+  );
+});
+
+test("Buchung im Raum ohne Genehmigungspflicht bleibt wie bisher sofort 'bestaetigt'", async () => {
+  const roomId = await createTestRoom("Unpflichtig Bestaetigt", false);
+
+  const res = await request(app)
+    .post("/api/bookings")
+    .send(
+      bookingBody(roomId, "2026-10-18T10:00:00Z", "2026-10-18T11:00:00Z")
+    );
+  assert.equal(res.status, 201);
+  assert.equal(res.body.status, "bestaetigt");
+  assert.equal(await bookingStatus(res.body.id), "bestaetigt");
+
+  // Regression zum bisherigen Verhalten: Der Spalten-Default greift weiter,
+  // auch wenn der Schalter am Raum ausdrücklich false geliefert wurde.
+  const serviceRes = await createBooking(
+    bookingBody(roomId, "2026-10-18T12:00:00Z", "2026-10-18T13:00:00Z")
+  );
+  assert.equal(serviceRes.status, "bestaetigt");
+});
 
 test("Eine ausstehende Buchung blockiert den Zeitraum: überschneidende neue Buchung wird abgelehnt", async () => {
   const roomId = await createTestRoom("Ausstehend Blockiert");

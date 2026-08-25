@@ -24,7 +24,8 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
         body.name,
         body.locationId,
         body.capacity,
-        body.amenities
+        body.amenities,
+        body.requiresApproval
       )
     );
   } catch (err) {

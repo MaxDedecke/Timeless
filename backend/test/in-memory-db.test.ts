@@ -148,7 +148,7 @@ const EXPECTED_TABLES = [
   "rooms",
 ] as const;
 
-test("applyMigrations erzeugt alle Tabellen aus 001 bis 003", async () => {
+test("applyMigrations erzeugt alle Tabellen aus 001 bis 004", async () => {
   const db = new InMemoryDb();
   try {
     const applied = await db.applyMigrations();
@@ -156,6 +156,7 @@ test("applyMigrations erzeugt alle Tabellen aus 001 bis 003", async () => {
       "001_locations_rooms.sql",
       "002_amenities.sql",
       "003_bookings.sql",
+      "004_rooms_requires_approval.sql",
     ]);
 
     // Introspektion über den pg-Katalog statt Annahme: Nur so ist bewiesen,
@@ -178,6 +179,33 @@ test("applyMigrations erzeugt alle Tabellen aus 001 bis 003", async () => {
       { key: "videokonferenz", label: "Videokonferenz" },
       { key: "whiteboard", label: "Whiteboard" },
     ]);
+
+    // Migration 004 (Genehmigungspflicht je Raum): Die Spalte existiert und
+    // ist NOT NULL mit Default false. Der Default wird verhaltensbasiert
+    // geprüft (INSERT ohne die Spalte), weil pg-mem ihn im information_schema-
+    // Katalog als null meldet – ein Defekt der In-Memory-Engine, nicht des
+    // Migrationsschemas; gegen echte Postgres steht dort „false“.
+    const column = await db.query<{ nullable: string }>(
+      "SELECT is_nullable AS \"nullable\" " +
+        "FROM information_schema.columns " +
+        "WHERE table_schema = 'public' AND table_name = 'rooms' AND column_name = 'requires_approval'"
+    );
+    assert.equal(column.rows.length, 1, "rooms.requires_approval fehlt");
+    assert.equal(column.rows[0].nullable, "NO");
+
+    const loc = await db.query<{ id: number }>(
+      "INSERT INTO locations (name) VALUES ('Migration 004 – Standort') RETURNING id::int AS id"
+    );
+    const room = await db.query<{ requiresApproval: boolean }>(
+      "INSERT INTO rooms (name, location_id, capacity) VALUES ('Defaultraum', $1, 6) " +
+        "RETURNING requires_approval AS \"requiresApproval\"",
+      [loc.rows[0].id]
+    );
+    assert.equal(
+      room.rows[0].requiresApproval,
+      false,
+      "Default false greift nicht – bestehende Räume dürften sich nicht unverändert verhalten"
+    );
   } finally {
     await db.end();
   }

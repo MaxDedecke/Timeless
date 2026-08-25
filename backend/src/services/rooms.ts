@@ -23,6 +23,12 @@ export interface Room {
   name: string;
   locationId: number;
   capacity: number;
+  /**
+   * Genehmigungspflicht je Raum (Anforderung 13): true bedeutet, dass neue
+   * Buchungen zunächst den Status „ausstehend" erhalten (der Zeitraum wird
+   * dennoch blockiert), false – der Default – bestätigt sie sofort.
+   */
+  requiresApproval: boolean;
 }
 
 /** Rohe Eingabefelder einer Änderung, wie sie der Client sendet. */
@@ -30,6 +36,8 @@ export interface RoomChangeInput {
   name?: unknown;
   locationId?: unknown;
   capacity?: unknown;
+  /** Optionaler Schalter der Genehmigungspflicht (PATCH: fehlt = unverändert). */
+  requiresApproval?: unknown;
 }
 
 
@@ -62,6 +70,7 @@ interface RoomBaseRow {
   locationId: number;
   capacity: number;
   locationName: string;
+  requiresApproval: boolean;
 }
 
 // Join über locations: GET /api/rooms liefert je Raum den Standort als
@@ -72,6 +81,7 @@ const ROOM_BASE_SELECT = `
          rooms.name AS name,
          rooms.location_id::int AS "locationId",
          rooms.capacity,
+         rooms.requires_approval AS "requiresApproval",
          locations.name AS "locationName"
   FROM rooms
   JOIN locations ON locations.id = rooms.location_id`;
@@ -121,6 +131,7 @@ async function withAmenities(
     name: row.name,
     locationId: row.locationId,
     capacity: row.capacity,
+    requiresApproval: row.requiresApproval,
     amenities: byRoom.get(row.id) ?? [],
     location: { id: row.locationId, name: row.locationName },
   }));
@@ -161,6 +172,22 @@ function validateLocationId(raw: unknown): number {
     throw new ValidationError("Ein Raum benötigt einen Standort.");
   }
   return value;
+}
+
+/**
+ * Genehmigungspflicht-Schalter (Anforderung 13): Nur die booleschen Werte
+ * true/false sind gültig – alles andere (auch Strings wie „true", Zahlen,
+ * null) ist ein ValidationError. Rückgabe undefined heißt „nicht geliefert"
+ * und bleibt in createRoom über den Spalten-Default false abgedeckt.
+ */
+function validateRequiresApproval(raw: unknown): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "boolean") {
+    throw new ValidationError(
+      "Die Genehmigungspflicht (requiresApproval) muss ein boolean sein."
+    );
+  }
+  return raw;
 }
 
 /**
@@ -275,6 +302,7 @@ export async function listAvailableRooms(
             r.name AS name,
             r.location_id::int AS "locationId",
             r.capacity,
+            r.requires_approval AS "requiresApproval",
             l.name AS "locationName"
      FROM rooms r
      JOIN locations l ON l.id = r.location_id
@@ -300,11 +328,14 @@ export async function createRoom(
   rawName: unknown,
   rawLocationId: unknown,
   rawCapacity: unknown,
-  rawAmenities?: unknown
+  rawAmenities?: unknown,
+  rawRequiresApproval?: unknown
 ): Promise<RoomWithAmenities> {
   const name = validateName(rawName);
   const locationId = validateLocationId(rawLocationId);
   const capacity = validateCapacity(rawCapacity);
+  const requiresApproval =
+    validateRequiresApproval(rawRequiresApproval) ?? false;
   const amenityKeys = parseAmenityKeys(rawAmenities);
 
   // Validierung und Einfügen in einer Transaktion: Der Standort-Check ist ein
@@ -324,13 +355,14 @@ export async function createRoom(
     }
 
     const inserted = await client.query<{ id: number }>(
-      `INSERT INTO rooms (name, location_id, capacity)
-       VALUES ($1, $2, $3)
+      `INSERT INTO rooms (name, location_id, capacity, requires_approval)
+       VALUES ($1, $2, $3, $4)
        RETURNING id::int AS id,
                  name,
                  location_id::int AS "locationId",
-                 capacity`,
-      [name, locationId, capacity]
+                 capacity,
+                 requires_approval AS "requiresApproval"`,
+      [name, locationId, capacity, requiresApproval]
     );
     const roomId = inserted.rows[0].id;
 
@@ -409,6 +441,10 @@ export async function updateRoom(
     requireAllFields || raw.capacity !== undefined
       ? validateCapacity(raw.capacity)
       : undefined;
+  const requiresApproval =
+    requireAllFields || raw.requiresApproval !== undefined
+      ? validateRequiresApproval(raw.requiresApproval)
+      : undefined;
   // Merkmale sind bei PUT wie PATCH optional: fehlt das Feld, bleibt die
   // bestehende Zuordnung unverändert; geliefert wird sie komplett ersetzt
   // (auch durch [], was alle Merkmale entfernt).
@@ -453,6 +489,10 @@ export async function updateRoom(
     if (capacity !== undefined) {
       values.push(capacity);
       assignments.push(`capacity = $${values.length}`);
+    }
+    if (requiresApproval !== undefined) {
+      values.push(requiresApproval);
+      assignments.push(`requires_approval = $${values.length}`);
     }
 
     if (assignments.length > 0) {

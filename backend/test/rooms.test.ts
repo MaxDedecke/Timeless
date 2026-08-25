@@ -255,6 +255,7 @@ test("listRooms liefert je Raum die zugeordneten Merkmale mit", async () => {
           name: "Besprechung klein",
           locationId: 11,
           capacity: 6,
+          requiresApproval: false,
           amenities: amenitiesByRoom.get(101),
           location: { id: 11, name: "Hamburg" },
         },
@@ -263,6 +264,7 @@ test("listRooms liefert je Raum die zugeordneten Merkmale mit", async () => {
           name: "Besprechung groß",
           locationId: 11,
           capacity: 20,
+          requiresApproval: false,
           amenities: amenitiesByRoom.get(102),
           location: { id: 11, name: "Hamburg" },
         },
@@ -303,6 +305,7 @@ test("listRooms setzt genau eine Listenabfrage ab und ordnet die Zeilen unverän
         name: `Solo ${Date.now()}`,
         locationId: 12,
         capacity: 4,
+        requiresApproval: false,
         amenities: [],
         location: { id: 12, name: "Berlin" },
       },
@@ -339,7 +342,7 @@ function roomRow(
   capacity: number,
   locationName: string
 ): Record<string, unknown> {
-  return { id, name, locationId, capacity, locationName };
+  return { id, name, locationId, capacity, requiresApproval: false, locationName };
 }
 
 /**
@@ -365,8 +368,8 @@ function respondToCreate(
     if (/^INSERT INTO rooms/i.test(sql)) {
       assert.deepEqual(
         record.values,
-        [expected.name, expected.locationId, expected.capacity],
-        "INSERT muss Name, Standort und Kapazität als Parameter übernehmen"
+        [expected.name, expected.locationId, expected.capacity, false],
+        "INSERT muss Name, Standort, Kapazität und den Schalter (Default false) als Parameter übernehmen"
       );
       return { rows: [{ id: 777 }], rowCount: 1 };
     }

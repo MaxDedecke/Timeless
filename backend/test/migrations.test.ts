@@ -145,6 +145,7 @@ test("DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich 
       "001_locations_rooms.sql",
       "002_amenities.sql",
       "003_bookings.sql",
+      "004_rooms_requires_approval.sql",
     ]);
 
     // Zweiter Lauf über denselben connect()-Client-Pfad: Das CREATE TABLE IF
@@ -179,6 +180,42 @@ test("DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich 
 // In-Memory-Postgres – Referenzierbarkeit eines buchungsfreien Raums,
 // Status-Default, FK-Fehlerfall und Löschverhalten.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Migration 004 (Genehmigungspflicht je Raum, Sprint 10): Die Spalte ist
+// NOT NULL mit Default false – bestehende Räume verhalten sich unverändert
+// weiter (jede neue Buchung sofort bestätigt), die Pflicht ist ein Opt-in.
+// ---------------------------------------------------------------------------
+
+test("Migration 004 existiert und ergänzt rooms.requires_approval als boolean mit Default false", async () => {
+  const sql = await readFile(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../src/db/migrations/004_rooms_requires_approval.sql"
+    ),
+    "utf8"
+  );
+  assert.match(sql, /ALTER TABLE rooms/);
+  assert.match(sql, /ADD COLUMN requires_approval BOOLEAN NOT NULL DEFAULT false/);
+});
+
+test("DB: Migration 004 setzt requires_approval bei bestehenden Räumen auf false (Default greift)", async () => {
+  const db = await InMemoryDb.migrated();
+  try {
+    const loc = await db.query<{ id: number }>(
+      "INSERT INTO locations (name) VALUES ('Teststandort') RETURNING id::int AS id"
+    );
+    // Ohne Angabe des Schalters angelegt – der Spalten-Default muss greifen.
+    const room = await db.query<{ id: number; requiresApproval: boolean }>(
+      "INSERT INTO rooms (name, location_id, capacity) VALUES ('Defaultraum', $1, 6) " +
+        "RETURNING id::int AS id, requires_approval AS \"requiresApproval\"",
+      [loc.rows[0].id]
+    );
+    assert.equal(room.rows[0].requiresApproval, false);
+  } finally {
+    await db.end();
+  }
+});
 
 test("DB: Buchung auf gültigen Raum anlegen – Zeile lesbar und Status-Default 'bestaetigt' gesetzt", async () => {
   const db = await InMemoryDb.migrated();

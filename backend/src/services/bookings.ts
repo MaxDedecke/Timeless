@@ -12,9 +12,11 @@ import {
  * aktuell laufenden Buchung (Anforderung 2).
  *
  * Der Urheber wird solange als Text geführt, bis die SSO-/Login-Klärung beim
- * Kunden abgeschlossen ist (siehe Migration 003). Den Status setzt die
- * Datenbank auf den Default 'bestaetigt' – sobald der Genehmigungsworkflow
- * kommt, vergibt die Service-Schicht ihn je Raum (Anforderung 7).
+ * Kunden abgeschlossen ist (siehe Migration 003). Den Anfangsstatus leitet
+ * die Service-Schicht beim Anlegen aus dem Genehmigungspflicht-Schalter des
+ * Raums ab (Anforderung 13): 'ausstehend' im pflichtigen Raum, sonst wie
+ * bisher 'bestaetigt'. Die weitere Bearbeitung (genehmigt/abgelehnt)
+ * übernimmt das Genehmigungsworkflow-Ticket.
  */
 
 /** Eine gespeicherte Buchung in der API-Form (Zeiten als ISO-8601-UTC-Text). */
@@ -226,8 +228,12 @@ export async function findOverlappingBookings(
  *    dem Commit des ersten aus und sieht dessen Buchung, sodass genau eine
  *    der beiden erfolgreich ist und die andere mit 409 abgelehnt wird.
  * 3. Überschneidungsprüfung (siehe findOverlappingBookings); ein Treffer wird
- *    mit ConflictError (HTTP 409) und verständlicher Meldung abgelehnt.
- * 4. INSERT mit Urheber; Status kommt aus dem Spalten-Default 'bestaetigt'.
+ *    mit ConflictError (HTTP 409) und verständlicher Meldung abgelehnt. Die
+ *    Prüfung wertet den Status bewusst nicht aus: Jede Buchungszeile – auch
+ *    eine ausstehende – belegt den Zeitraum (Anforderung 13).
+ * 4. INSERT mit Urheber; der Status ergibt sich aus dem Genehmigungs-
+ *    pflicht-Schalter des Raums (Schritt 2): 'ausstehend' bei Pflicht, sonst
+ *    'bestaetigt'.
  *
  * Wirft ValidationError (HTTP 400) bei ungültigen Feldern und auch dann, wenn
  * der Raum nicht existiert – das ist ein Validierungsfehler des Clients, kein
@@ -246,14 +252,17 @@ export async function createBooking(input: BookingInput): Promise<Booking> {
   try {
     await client.query("BEGIN");
 
-    // Schritt 2: Sperre auf die Raumzeile (s. Kommentar oben).
-    const room = await client.query(
-      "SELECT 1 FROM rooms WHERE id = $1 FOR UPDATE",
+    // Schritt 2: Sperre auf die Raumzeile (s. Kommentar oben). Der Schalter
+    // wird im selben gesperrten Lesevorgang mitgelesen – die Status-Ableitung
+    // sieht also garantiert den Wert, zu dem die Sperre gehört.
+    const room = await client.query<{ requiresApproval: boolean }>(
+      "SELECT requires_approval AS \"requiresApproval\" FROM rooms WHERE id = $1 FOR UPDATE",
       [roomId]
     );
     if ((room.rowCount ?? 0) === 0) {
       throw new ValidationError("Der angegebene Raum existiert nicht.");
     }
+    const requiresApproval = room.rows[0].requiresApproval;
 
     // Schritt 3: Kollisionen fachlich prüfen, bevor geschrieben wird.
     const overlaps = await findOverlappingBookings(client, roomId, startsAt, endsAt);
@@ -263,17 +272,22 @@ export async function createBooking(input: BookingInput): Promise<Booking> {
       );
     }
 
-    // Schritt 4: Speichern – der Status bleibt beim Spalten-Default.
+    // Schritt 4: Speichern – der Anfangsstatus folgt dem Genehmigungs-
+    // pflicht-Schalter des Raums (Anforderung 13): 'ausstehend' im
+    // pflichtigen Raum (der Zeitraum blockiert dennoch), sonst wie bisher
+    // sofort 'bestaetigt'. Der Schalter wurde in Schritt 2 unter derselben
+    // Zeilensperre gelesen, die Ableitung ist also konsistent zur Prüfung.
+    const status = requiresApproval ? "ausstehend" : "bestaetigt";
     const { rows } = await client.query(
-      `INSERT INTO bookings (room_id, created_by, starts_at, ends_at)
-       VALUES ($1, $2, $3::timestamptz, $4::timestamptz)
+      `INSERT INTO bookings (room_id, created_by, starts_at, ends_at, status)
+       VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5)
        RETURNING id::int AS id,
                  room_id::int AS "roomId",
                  created_by AS "createdBy",
                  starts_at AS "startsAt",
                  ends_at AS "endsAt",
                  status`,
-      [roomId, createdBy, startsAt.toISOString(), endsAt.toISOString()]
+      [roomId, createdBy, startsAt.toISOString(), endsAt.toISOString(), status]
     );
 
     await client.query("COMMIT");
