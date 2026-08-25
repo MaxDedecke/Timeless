@@ -17,6 +17,7 @@ import {
 } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
+import { Switch } from "../components/ui/switch";
 
 /**
  * Raum-Anlegen-/Bearbeiten-Formular: über /rooms/new (Anlegen) und
@@ -101,6 +102,7 @@ export default function RoomForm({ mode }: RoomFormProps) {
   const [locationId, setLocationId] = useState("");
   const [capacity, setCapacity] = useState("");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [requiresApproval, setRequiresApproval] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -137,6 +139,9 @@ export default function RoomForm({ mode }: RoomFormProps) {
           setLocationId(String(raum.locationId));
           setCapacity(String(raum.capacity));
           setSelectedKeys(raum.amenities.map((a) => a.key));
+          // Tolerant gelesen: Bis das Basisticket „Genehmigungspflicht-Flag je
+          // Raum" liefert, kommt GET /api/rooms/:id ohne das Feld daher.
+          setRequiresApproval(raum.requiresApproval ?? false);
         }
         setLoadState({ phase: "ready" });
       } catch (err) {
@@ -191,6 +196,9 @@ export default function RoomForm({ mode }: RoomFormProps) {
       // Komplett-Ersetzung der Zuordnung (PUT/POST-Semantik der API): eine
       // abgewählte Checkbox entfernt das Merkmal damit ebenfalls.
       amenities: selectedKeys,
+      // Genehmigungspflicht geht in beiden Pfaden mit (Anlegen/Bearbeiten);
+      // bis zum Backend-Feld wird der Wert serverseitig ignoriert.
+      requiresApproval,
     };
     setSaving(true);
     try {
@@ -374,6 +382,31 @@ export default function RoomForm({ mode }: RoomFormProps) {
                   ))}
                 </div>
               </fieldset>
+
+              {/* Genehmigungspflicht je Raum (Sprint 10): Switch laut
+                  Design-Konzept („Switch für Genehmigungspflicht je Raum"),
+                  nicht als zweckentfremdete Checkbox. */}
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-0.5">
+                  <label
+                    htmlFor="room-requires-approval"
+                    className="text-sm font-medium"
+                  >
+                    Genehmigungspflichtig
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Buchungen in diesem Raum müssen vorab genehmigt werden und
+                    starten mit dem Status „Ausstehend“.
+                  </p>
+                </div>
+                <Switch
+                  id="room-requires-approval"
+                  checked={requiresApproval}
+                  onCheckedChange={setRequiresApproval}
+                  data-testid="room-requires-approval"
+                  aria-label="Genehmigungspflicht für Buchungen in diesem Raum"
+                />
+              </div>
 
               {saveError !== null && (
                 <Alert variant="destructive" data-testid="room-save-error">

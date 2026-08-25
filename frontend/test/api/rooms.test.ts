@@ -39,6 +39,7 @@ const sampleRoom: Room = {
   capacity: 12,
   amenities: [{ key: "beamer", label: "Beamer" }],
   location: { id: 3, name: "Werkhaus" },
+  requiresApproval: true,
 };
 
 describe("rooms API-Client", () => {
@@ -72,6 +73,22 @@ describe("rooms API-Client", () => {
     expect(init.headers).toMatchObject({ "Content-Type": "application/json" });
     expect(JSON.parse(init.body)).toEqual(input);
     expect(created).toEqual(sampleRoom);
+  });
+
+  it("createRoom nimmt requiresApproval unverändert in den Body auf", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(sampleRoom, 201));
+
+    await createRoom({
+      name: "Atelier Nord",
+      locationId: 3,
+      capacity: 12,
+      amenities: [],
+      requiresApproval: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body).requiresApproval).toBe(true);
   });
 
   it("updateRoom ruft PUT /api/rooms/:id mit Raum-ID im Pfad und JSON-Body auf", async () => {

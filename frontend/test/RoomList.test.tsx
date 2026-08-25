@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import App from "../src/App";
 import RoomList from "../src/pages/RoomList";
+import type { Room } from "../src/api/rooms";
 
 // jsdom kennt kein ResizeObserver; die Radix-Checkbox misst ihr verstecktes
 // Formular-Input aber genau damit, sobald sie INNERHALB eines <form> steht
@@ -49,7 +50,8 @@ function renderRoomList() {
   );
 }
 
-const ROOMS = [
+/** Explizit getypt: Räume mit und ohne requiresApproval-Feld mischen sich hier bewusst. */
+const ROOMS: Room[] = [
   {
     id: 1,
     name: "Atelier Nord",
@@ -60,6 +62,7 @@ const ROOMS = [
       { key: "videokonferenz", label: "Videokonferenz" },
     ],
     location: { id: 7, name: "Werkhaus" },
+    requiresApproval: true,
   },
   {
     id: 2,
@@ -68,6 +71,8 @@ const ROOMS = [
     capacity: 4,
     amenities: [],
     location: { id: 9, name: "Loft" },
+    // Feld bewusst ABWESEND: Die API antwortet bis zum Basisticket
+    // „Genehmigungspflicht-Flag je Raum“ ohne das Feld.
   },
   {
     id: 3,
@@ -539,6 +544,44 @@ describe("RoomList – Anlegen-/Bearbeiten-/Kalender-Zugang", () => {
       "href",
       expect.stringMatching(/\/rooms\/4$/)
     );
+  });
+});
+
+/**
+ * Kennzeichnung der Genehmigungspflicht in der Raumliste: Räume mit dem Flag
+ * tragen ein sichtbares Badge, Räume ohne Flag (inkl. API-Antwort ohne das
+ * Feld – Basisticket steht aus) zeigen keines.
+ */
+describe("RoomList – Genehmigungspflicht-Kennzeichnung", () => {
+  it("zeigt für genehmigungspflichtige Räume ein Badge und für andere keines", async () => {
+    global.fetch = fetchApi() as unknown as typeof global.fetch;
+    renderRoomList();
+    const grid = await waitForRooms(3);
+    const cards = within(grid).getAllByTestId("room-card");
+
+    // Atelier Nord (requiresApproval: true) → Badge vorhanden.
+    const badge = within(cards[0]).getByTestId("room-requires-approval-1");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toBeVisible();
+    expect(badge).toHaveTextContent("Genehmigung erforderlich");
+
+    // Kreativraum Süd (Feld abwesend) und Werkstatt Ost (false): kein Badge.
+    expect(
+      within(cards[1]).queryByTestId("room-requires-approval-2")
+    ).not.toBeInTheDocument();
+    expect(
+      within(cards[2]).queryByTestId("room-requires-approval-3")
+    ).not.toBeInTheDocument();
+  });
+
+  it("rendert die Liste auch, wenn KEIN Raum das Feld trägt (API ohne requiresApproval)", async () => {
+    const ohneFlag = ROOMS.map(({ requiresApproval: _entfernt, ...rest }) => rest);
+    global.fetch = fetchWith(ohneFlag) as unknown as typeof global.fetch;
+    renderRoomList();
+
+    const grid = await waitForRooms(3);
+    expect(within(grid).getAllByTestId("room-card")).toHaveLength(3);
+    expect(screen.queryByTestId(/^room-requires-approval-/)).not.toBeInTheDocument();
   });
 });
 

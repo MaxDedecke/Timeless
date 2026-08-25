@@ -9,6 +9,7 @@ import {
   Plus,
   RotateCw,
   SearchX,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -53,6 +54,12 @@ export interface Room {
   capacity: number;
   amenities: RoomAmenity[];
   location: RoomLocation;
+  /**
+   * Genehmigungspflicht des Raums (Sprint-10-Plan). Bis das Basisticket
+   * „Genehmigungspflicht-Flag je Raum" das Feld liefert, antwortet die API
+   * ohne es – gelesen tolerant mit Default false.
+   */
+  requiresApproval?: boolean;
 }
 
 type LoadState =
@@ -199,6 +206,19 @@ function RoomCard({ room }: { room: Room }) {
             </span>
           </span>
         </div>
+        {/* Kennzeichnung der Genehmigungspflicht je Raum: Badge mit
+            ShieldCheck, nur gesetzt wenn das Flag anliegt – Räume ohne
+            Pflicht zeigen keine Zeile (kein „Nein“-Lärm in der Liste). */}
+        {room.requiresApproval && (
+          <Badge
+            variant="warning"
+            data-testid={`room-requires-approval-${room.id}`}
+            className="mt-1 w-fit gap-1"
+          >
+            <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+            Genehmigung erforderlich
+          </Badge>
+        )}
         <CardDescription className="flex items-center gap-1.5 text-sm">
           <MapPin className="h-4 w-4" aria-hidden="true" />
           {room.location?.name ?? "Ohne Standort"}

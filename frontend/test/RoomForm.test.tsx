@@ -129,9 +129,16 @@ describe("RoomForm – Submit-Fehleranzeige (Reject-Case)", () => {
     renderAt("/rooms/new");
     await ausfuellenUndAbsenden(user);
 
-    // Das Speichern hat das Formular verlassen: gültiger Payload war unterwegs…
+    // Das Speichern hat das Formular verlassen: gültiger Payload war unterwegs
+    // (Genehmigungspflicht als explizites false, da der Schalter aus blieb)…
     expect(gesendeteKoerper).toEqual([
-      { name: "Atelier Nord", locationId: 7, capacity: 12, amenities: [] },
+      {
+        name: "Atelier Nord",
+        locationId: 7,
+        capacity: 12,
+        amenities: [],
+        requiresApproval: false,
+      },
     ]);
 
     // …und die Ablehnung erscheint als einheitliches Fehler-Alert über dem
@@ -266,5 +273,168 @@ describe("RoomForm – Submit-Ladezustand (Pending-Case)", () => {
     });
     resolveZweiterPost(jsonResponse(ROOM_1, 201));
     expect(await screen.findByTestId("rooms-empty")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Genehmigungspflicht-Schalter (Sprint 10): Der Umschalter im Raumformular
+ * steuert requiresApproval im Payload – Default „aus“ beim Anlegen,
+ * vorausgefüllt beim Bearbeiten und tolerant, wenn die API das Feld noch
+ * nicht liefert (das Basisticket „Genehmigungspflicht-Flag je Raum“ steht
+ * aus; solange ignoriert das Backend den Wert). Server-Fehler erscheinen
+ * unverändert im etablierten destructiven Speicherfehler-Alert.
+ */
+describe("RoomForm – Genehmigungspflicht-Schalter", () => {
+  it("ist beim Anlegen standardmäßig aus und sendet nach dem Einschalten requiresApproval: true", async () => {
+    const user = userEvent.setup();
+    const gesendeteKoerper: unknown[] = [];
+    installFetch(async (url, method, init) => {
+      const katalog = katalogAntwort(url);
+      if (katalog !== null) return katalog;
+      if (url === "/api/rooms/1" && method === "GET") return jsonResponse(ROOM_1);
+      if (url === "/api/rooms" && method === "POST") {
+        gesendeteKoerper.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ ...ROOM_1, id: 9 }, 201);
+      }
+      if (url === "/api/rooms") return jsonResponse([]);
+      throw new Error(`Unerwarteter API-Pfad: ${url}`);
+    });
+
+    renderAt("/rooms/new");
+    await screen.findByTestId("room-form");
+
+    // Default aus: Ein neuer Raum ist nicht genehmigungspflichtig.
+    expect(screen.getByTestId("room-requires-approval")).toHaveAttribute(
+      "data-state",
+      "unchecked"
+    );
+
+    await user.type(screen.getByTestId("room-name"), "Boardroom");
+    await user.selectOptions(screen.getByTestId("room-location"), "7");
+    await user.type(screen.getByTestId("room-capacity"), "8");
+
+    await user.click(screen.getByTestId("room-requires-approval"));
+    expect(screen.getByTestId("room-requires-approval")).toHaveAttribute(
+      "data-state",
+      "checked"
+    );
+
+    await user.click(screen.getByTestId("room-submit"));
+
+    expect(gesendeteKoerper).toEqual([
+      {
+        name: "Boardroom",
+        locationId: 7,
+        capacity: 8,
+        amenities: [],
+        requiresApproval: true,
+      },
+    ]);
+  });
+
+  it("liest die gespeicherte Genehmigungspflicht beim Bearbeiten vor und sendet sie unverändert zurück", async () => {
+    const user = userEvent.setup();
+    const gesendeteKoerper: unknown[] = [];
+    installFetch(async (url, method, init) => {
+      const katalog = katalogAntwort(url);
+      if (katalog !== null) return katalog;
+      if (url === "/api/rooms/1" && method === "GET") {
+        return jsonResponse({ ...ROOM_1, requiresApproval: true });
+      }
+      if (url === "/api/rooms/1" && method === "PUT") {
+        gesendeteKoerper.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ ...ROOM_1, requiresApproval: true });
+      }
+      if (url === "/api/rooms") return jsonResponse([]);
+      throw new Error(`Unerwarteter API-Pfad: ${url}`);
+    });
+
+    renderAt("/rooms/1/edit");
+    await screen.findByTestId("room-form");
+
+    // Vorausfüllung aus GET /api/rooms/1: Schalter steht auf an.
+    expect(screen.getByTestId("room-requires-approval")).toHaveAttribute(
+      "data-state",
+      "checked"
+    );
+
+    await user.click(screen.getByTestId("room-submit"));
+
+    expect(gesendeteKoerper).toEqual([
+      {
+        name: "Atelier Nord",
+        locationId: 7,
+        capacity: 12,
+        amenities: ["beamer"],
+        requiresApproval: true,
+      },
+    ]);
+  });
+
+  it("behandelt eine API-Antwort ohne requiresApproval-Feld als nicht genehmigungspflichtig", async () => {
+    const user = userEvent.setup();
+    const gesendeteKoerper: unknown[] = [];
+    installFetch(async (url, method, init) => {
+      const katalog = katalogAntwort(url);
+      if (katalog !== null) return katalog;
+      // Bewusst OHNE requiresApproval: Der aktuelle Backend-Stand kennt das
+      // Feld noch nicht – das Formular darf daran nicht scheitern.
+      if (url === "/api/rooms/1" && method === "GET") return jsonResponse(ROOM_1);
+      if (url === "/api/rooms/1" && method === "PUT") {
+        gesendeteKoerper.push(JSON.parse(String(init?.body)));
+        return jsonResponse(ROOM_1);
+      }
+      if (url === "/api/rooms") return jsonResponse([]);
+      throw new Error(`Unerwarteter API-Pfad: ${url}`);
+    });
+
+    renderAt("/rooms/1/edit");
+    await screen.findByTestId("room-form");
+
+    expect(screen.getByTestId("room-requires-approval")).toHaveAttribute(
+      "data-state",
+      "unchecked"
+    );
+
+    await user.click(screen.getByTestId("room-submit"));
+
+    const koerper = gesendeteKoerper[0] as { requiresApproval?: boolean };
+    expect(koerper.requiresApproval).toBe(false);
+  });
+
+  it("zeigt einen Server-Fehler beim Speichern im etablierten Alert und erhält den Schalter-Zustand", async () => {
+    const user = userEvent.setup();
+    installFetch(async (url, method) => {
+      const katalog = katalogAntwort(url);
+      if (katalog !== null) return katalog;
+      if (url === "/api/rooms" && method === "POST") {
+        return jsonResponse(
+          { error: "Der angegebene Standort existiert nicht." },
+          400
+        );
+      }
+      throw new Error(`Unerwarteter API-Pfad: ${url}`);
+    });
+
+    renderAt("/rooms/new");
+    await screen.findByTestId("room-form");
+    await user.type(screen.getByTestId("room-name"), "Boardroom");
+    await user.selectOptions(screen.getByTestId("room-location"), "7");
+    await user.type(screen.getByTestId("room-capacity"), "8");
+    await user.click(screen.getByTestId("room-requires-approval"));
+    await user.click(screen.getByTestId("room-submit"));
+
+    // Etablierter Fehlerzustand: destructives Alert über dem Formular.
+    const alert = await screen.findByTestId("room-save-error");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("Speichern fehlgeschlagen");
+
+    // Das Formular bleibt offen – alle Eingaben inklusive Schalter bleiben.
+    expect(screen.getByTestId("room-requires-approval")).toHaveAttribute(
+      "data-state",
+      "checked"
+    );
+    expect(screen.getByTestId("room-name")).toHaveValue("Boardroom");
+    expect(screen.getByTestId("room-submit")).toBeEnabled();
   });
 });

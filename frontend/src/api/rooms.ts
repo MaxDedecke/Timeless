@@ -20,6 +20,14 @@ export interface Room {
   capacity: number;
   amenities: RoomAmenity[];
   location: RoomLocation;
+  /**
+   * Genehmigungspflicht des Raums (Sprint-10-Plan): Buchungen in einem
+   * solchen Raum erhalten zunächst den Status „ausstehend". Bis das
+   * Basisticket „Genehmigungspflicht-Flag je Raum" das Feld im Backend
+   * liefert, antwortet GET /api/rooms ohne es – der Client liest es daher
+   * tolerant mit Default false.
+   */
+  requiresApproval?: boolean;
 }
 
 /**
@@ -33,6 +41,8 @@ export interface RoomInput {
   capacity: number;
   /** Optionale Merkmals-Schlüssel; fehlt das Feld, bleibt die Zuordnung unverändert. */
   amenities?: string[];
+  /** Genehmigungspflicht; bis zum Backend-Feld wird der Wert ignoriert. */
+  requiresApproval?: boolean;
 }
 
 /** Alle Räume inklusive Standort und Merkmalen (für Liste und Filter). */
