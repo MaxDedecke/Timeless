@@ -142,13 +142,14 @@ test("InMemoryDb: Abfrage gegen nicht existierende Tabelle führt zu einem verst
 
 const EXPECTED_TABLES = [
   "amenities",
+  "booking_guests",
   "bookings",
   "locations",
   "room_amenities",
   "rooms",
 ] as const;
 
-test("applyMigrations erzeugt alle Tabellen aus 001 bis 004", async () => {
+test("applyMigrations erzeugt alle Tabellen aus 001 bis 005", async () => {
   const db = new InMemoryDb();
   try {
     const applied = await db.applyMigrations();
@@ -157,6 +158,7 @@ test("applyMigrations erzeugt alle Tabellen aus 001 bis 004", async () => {
       "002_amenities.sql",
       "003_bookings.sql",
       "004_rooms_requires_approval.sql",
+      "005_booking_guests.sql",
     ]);
 
     // Introspektion über den pg-Katalog statt Annahme: Nur so ist bewiesen,

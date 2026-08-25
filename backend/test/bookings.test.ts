@@ -693,3 +693,185 @@ test("checkIn lehnt stornierte und als 'nicht erschienen' behandelte Buchungen m
 test("checkIn wirft für unbekannte ID einen DomainNotFoundError", async () => {
   await assert.rejects(() => checkIn(42424242), DomainNotFoundError);
 });
+
+// ---------------------------------------------------------------------------
+// Teil 4: Gäste einer Buchung (Anforderung 1: Buchung für Gäste ohne eigenen
+// Account). Der POST übernimmt das optionale `guests`-Array, persistiert die
+// Gäste in der Transaktion der Buchung und liefert sie in der Antwort zurück.
+// GET /api/bookings lädt die Gäste separat pro Buchung – der leere Fall
+// (keine Gäste) bleibt byte-ident zum bisherigen Vertrag.
+// ---------------------------------------------------------------------------
+
+test("POST /api/bookings persistiert erfasste Gäste und liefert sie in der Antwort zurück", async () => {
+  const roomId = await createTestRoom("Gäste Erfolg");
+  const body = {
+    ...bookingBody(roomId, "2026-10-20T10:00:00Z", "2026-10-20T11:00:00Z"),
+    guests: [
+      { name: "Frida Lang", email: "frida@gast.example.org" },
+      { name: "Tom Reuter", email: "tom@gast.example.org" },
+    ],
+  };
+
+  const res = await request(app).post("/api/bookings").send(body);
+  assert.equal(res.status, 201);
+  assert.equal(res.body.status, "bestaetigt");
+  // Gäste kommen in der Antwort als Array mit id, name, email.
+  assert.ok(Array.isArray(res.body.guests), "Antwort enthält keine guests-Liste");
+  assert.equal(res.body.guests.length, 2);
+  assert.equal(res.body.guests[0].name, "Frida Lang");
+  assert.equal(res.body.guests[0].email, "frida@gast.example.org");
+  assert.ok(res.body.guests[0].id > 0);
+  assert.equal(res.body.guests[1].name, "Tom Reuter");
+  assert.equal(res.body.guests[1].email, "tom@gast.example.org");
+
+  // Die Gäste sind wirklich in der Tabelle booking_guests mit der
+  // korrekten booking_id verknüpft.
+  const { rows } = await db.query<{ name: string; email: string }>(
+    "SELECT name, email FROM booking_guests WHERE booking_id = $1 ORDER BY id",
+    [res.body.id]
+  );
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].name, "Frida Lang");
+  assert.equal(rows[0].email, "frida@gast.example.org");
+  assert.equal(rows[1].name, "Tom Reuter");
+  assert.equal(rows[1].email, "tom@gast.example.org");
+});
+
+test("GET /api/bookings liefert Buchungen mit ihren Gästen", async () => {
+  const roomId = await createTestRoom("Gäste GET");
+  const bookingId = await createBooking({
+    roomId,
+    startsAt: "2026-10-21T10:00:00Z",
+    endsAt: "2026-10-21T11:00:00Z",
+    createdBy: "mitarbeiter@example.com",
+    guests: [
+      { name: "Frida Lang", email: "frida@gast.example.org" },
+      { name: "Tom Reuter", email: "tom@gast.example.org" },
+    ],
+  });
+
+  const res = await request(app).get(`/api/bookings?roomId=${roomId}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 1);
+  assert.ok(Array.isArray(res.body[0].guests));
+  assert.equal(res.body[0].guests.length, 2);
+  assert.equal(res.body[0].guests[0].name, "Frida Lang");
+  assert.equal(res.body[0].guests[1].name, "Tom Reuter");
+});
+
+test("POST /api/bookings ohne Gäste: Antwort enthält kein guests-Feld (byte-ident zum bisherigen Vertrag)", async () => {
+  const roomId = await createTestRoom("Gäste Leer");
+
+  const res = await request(app)
+    .post("/api/bookings")
+    .send(bookingBody(roomId, "2026-10-22T10:00:00Z", "2026-10-22T11:00:00Z"));
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.status, "bestaetigt");
+  // Kein guests-Feld oder leeres Array – der Slot darf nicht crashen.
+  assert.equal(
+    res.body.guests === undefined || res.body.guests.length === 0,
+    true
+  );
+
+  // Tabelle booking_guests ist leer für diese Buchung.
+  const count = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM booking_guests WHERE booking_id = $1",
+    [res.body.id]
+  );
+  assert.equal(count.rows[0].n, 0);
+});
+
+test("POST /api/bookings mit leerem guests-Array speichert ebenfalls keine Gäste", async () => {
+  const roomId = await createTestRoom("Gäste Leeres Array");
+
+  const res = await request(app)
+    .post("/api/bookings")
+    .send({
+      ...bookingBody(roomId, "2026-10-23T10:00:00Z", "2026-10-23T11:00:00Z"),
+      guests: [],
+    });
+
+  assert.equal(res.status, 201);
+  const count = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM booking_guests WHERE booking_id = $1",
+    [res.body.id]
+  );
+  assert.equal(count.rows[0].n, 0);
+});
+
+test("POST /api/bookings lehnt ungültige Gäste mit 400 ab – keine Zeile in booking_guests", async () => {
+  const roomId = await createTestRoom("Gäste Ungueltig");
+
+  const cases: Array<Record<string, unknown>> = [
+    // guests ist kein Array
+    { guests: "keine-liste" },
+    // Gast ohne name
+    { guests: [{ email: "x@gast.example.org" }] },
+    // Gast ohne email
+    { guests: [{ name: "Nur Name" }] },
+    // Gast mit leerem Namen
+    { guests: [{ name: "   ", email: "x@gast.example.org" }] },
+    // Gast mit leerer E-Mail
+    { guests: [{ name: "X", email: "" }] },
+    // Gast weder name noch email
+    { guests: [{ foo: "bar" }] },
+  ];
+
+  const before = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM booking_guests"
+  );
+
+  for (const extra of cases) {
+    const res = await request(app)
+      .post("/api/bookings")
+      .send({
+        ...bookingBody(roomId, "2026-10-24T10:00:00Z", "2026-10-24T11:00:00Z"),
+        ...extra,
+      });
+    assert.equal(res.status, 400, `Status für ${JSON.stringify(extra)} war nicht 400`);
+    assert.ok(
+      typeof res.body.error === "string" && res.body.error.length > 0,
+      "Antwort enthält keine verständliche Fehlermeldung"
+    );
+  }
+
+  // Keine Buchungen und keine Gäste angelegt – alles im Transaction-Rollback.
+  assert.equal(await countBookings(roomId), 0);
+  const after = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM booking_guests"
+  );
+  assert.equal(after.rows[0].n, before.rows[0].n, "Gäste dürfen aus ungültigen Anfragen stammen");
+});
+
+test("Buchungskonflikt mit Gästen: weder Buchung noch Gäste werden persistiert", async () => {
+  const roomId = await createTestRoom("Gäste Konflikt");
+  // Bestehende Buchung blockiert den Zeitraum.
+  await seedBooking(roomId, "2026-10-25T10:00:00Z", "2026-10-25T11:00:00Z");
+
+  // Gäste dürfen nicht ohne die Buchung in booking_guests zurückbleiben.
+  // Wir zählen VOR dem POST, um nicht von Gästen anderer Tests beeinflusst zu werden.
+  const before = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM booking_guests"
+  );
+
+  const res = await request(app)
+    .post("/api/bookings")
+    .send({
+      ...bookingBody(roomId, "2026-10-25T10:30:00Z", "2026-10-25T11:30:00Z"),
+      guests: [{ name: "Frida Lang", email: "frida@gast.example.org" }],
+    });
+
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /bereits gebucht/);
+  // Nach einem Konflikt darf keine neue booking_guests-Zeile hinzugekommen sein –
+  // weder für diesen Gast noch irgend einen anderen.
+  const after = await db.query<{ n: number }>(
+    "SELECT COUNT(*)::int AS n FROM booking_guests"
+  );
+  assert.equal(
+    after.rows[0].n,
+    before.rows[0].n,
+    "Gäste ohne gültige Buchung dürfen nicht persistiert sein"
+  );
+});

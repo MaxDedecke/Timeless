@@ -49,6 +49,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
       endsAt: body.endsAt,
       createdBy: body.createdBy,
     };
+    if (body.guests !== undefined) input.guests = body.guests;
     res.status(201).json(await createBooking(input));
   } catch (err) {
     next(err);

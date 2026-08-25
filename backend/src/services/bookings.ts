@@ -19,6 +19,19 @@ import {
  * übernimmt das Genehmigungsworkflow-Ticket.
  */
 
+/** Ein Gast einer Buchung (Anforderung 1: Buchung für Gäste ohne eigenen Account). */
+export interface Guest {
+  id: number;
+  name: string;
+  email: string;
+}
+
+/** Rohe Gänge-Eingabedaten, wie sie der Client sendet (ohne id). */
+export interface GuestInput {
+  name: string;
+  email: string;
+}
+
 /** Eine gespeicherte Buchung in der API-Form (Zeiten als ISO-8601-UTC-Text). */
 export interface Booking {
   id: number;
@@ -34,6 +47,12 @@ export interface Booking {
    * Frontend ohne separates Config-Request die Frist kennt.
    */
   noShowAfterMinutes: number;
+  /**
+   * Erfasste Gäste der Buchung (Anforderung 1: Buchung für Gäste ohne eigenen
+   * Account) – optional, leer oder abwesend, wenn die Buchung ohne Gäste
+   * angelegt wurde (der Normalfall).
+   */
+  guests?: Guest[];
 }
 
 /** Rohe Eingabefelder einer Buchung, wie sie der Client sendet. */
@@ -42,14 +61,20 @@ export interface BookingInput {
   startsAt?: unknown;
   endsAt?: unknown;
   createdBy?: unknown;
+  /**
+   * Gäste ohne eigenen Account (Anforderung 1): `guests: [{ name, email }, …]`.
+   * Optional – der leere Fall sendet das Feld nicht mit (siehe BookingForm),
+   * die API verhält sich dann unverändert.
+   */
+  guests?: GuestInput[];
 }
 
 /** Alles, was SQL ausführen kann: der Pool oder ein Transaktions-Client. */
 export interface SqlExecutor {
-  query(
+  query<R extends object = any>(
     sql: string,
     values?: unknown[]
-  ): Promise<{ rows: any[]; rowCount: number | null }>;
+  ): Promise<{ rows: R[]; rowCount: number | null }>;
 }
 
 /** Rohzeile aus der Datenbank (Zeiten kommen als Date bzw. datumsähnlicher Text). */
@@ -71,13 +96,28 @@ const BOOKING_SELECT = `
          status
   FROM bookings`;
 
+/** Roher Request für das Laden der Gäste einer Buchung (Anforderung 1). */
+const GUEST_SELECT = `
+  SELECT id::int AS id,
+         name,
+         email
+  FROM booking_guests
+  WHERE booking_id = $1
+  ORDER BY id`;
+
+/** Lädt alle Gäste einer Buchung (Anforderung 1: Buchung für Gäste ohne eigenen Account). */
+async function loadGuests(db: SqlExecutor, bookingId: number): Promise<Guest[]> {
+  const { rows } = await db.query<Guest>(GUEST_SELECT, [bookingId]);
+  return rows;
+}
+
 /** Liefert die System-Konfiguration (No-Show-Frist) für eine Booking-Antwort. */
 function noShowFrist(): number {
   return getConfig().noShowAfterMinutes;
 }
 
-function toBooking(row: BookingRow): Booking {
-  return {
+function toBooking(row: BookingRow, guests?: Guest[]): Booking {
+  const result: Booking = {
     id: row.id,
     roomId: row.roomId,
     createdBy: row.createdBy,
@@ -86,6 +126,10 @@ function toBooking(row: BookingRow): Booking {
     status: row.status,
     noShowAfterMinutes: noShowFrist(),
   };
+  if (guests !== undefined) {
+    result.guests = guests;
+  }
+  return result;
 }
 
 /**
@@ -150,7 +194,18 @@ export async function listBookingsForRoom(
      ORDER BY starts_at`,
     values
   );
-  return rows.map((row) => toBooking(row as BookingRow));
+  // Gäste separat nachladen (N+1 hier bewusst akzeptiert: Die Listen sind
+  // klein – typischerweise einzelne Buchungen pro Tag – und ein Join würde
+  // die paginierten Buchungen unverhältnismäßig aufblasen).
+  const bookings = await Promise.all(
+    rows.map(async (row) => {
+      const booking = toBooking(row as BookingRow);
+      const guests = await loadGuests(pool, booking.id);
+      if (guests.length > 0) booking.guests = guests;
+      return booking;
+    })
+  );
+  return bookings;
 }
 
 function validateRoomId(raw: unknown): number {
@@ -184,6 +239,45 @@ function validateCreatedBy(raw: unknown): string {
 }
 
 /**
+ * Validiert die optionale Gäste-Liste (Anforderung 1: Buchung für Gäste ohne
+ * eigenen Account): Jeder Gast muss Name und E-Mail als nicht-leere Strings
+ * haben. Ein leeres Array ist zulässig („keine Gäste" ist der Normalfall und
+ * bleibt byte-identisch zum bisherigen Vertrag, weil das Frontend das Feld
+ * weglässt). Eine fehlende E-Mail-Prüfung ist bewusst lax – Gäste haben keinen
+ * Account, ein @-Check reicht (ausgeführt im Frontend).
+ */
+function validateGuests(raw: unknown): GuestInput[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new ValidationError(
+      "Gäste müssen als Liste von Objekten { name, email } übergeben werden."
+    );
+  }
+  const result: GuestInput[] = [];
+  for (const entry of raw) {
+    if (
+      entry === null ||
+      typeof entry !== "object" ||
+      typeof (entry as { name?: unknown }).name !== "string" ||
+      typeof (entry as { email?: unknown }).email !== "string"
+    ) {
+      throw new ValidationError(
+        "Jeder Gast benötigt Name und E-Mail-Adresse als Text."
+      );
+    }
+    const name = (entry as { name: string }).name.trim();
+    const email = (entry as { email: string }).email.trim();
+    if (name === "" || email === "") {
+      throw new ValidationError(
+        "Gäste dürfen keinen leeren Namen oder eine leere E-Mail-Adresse haben."
+      );
+    }
+    result.push({ name, email });
+  }
+  return result.length === 0 ? [] : result;
+}
+
+/**
  * Findet bestehende Buchungen desselben Raums, die den Zeitraum schneiden.
  *
  * Überschneidung als halboffenes Intervall: Eine bestehende Buchung kollidiert
@@ -213,7 +307,15 @@ export async function findOverlappingBookings(
      ORDER BY starts_at`,
     [roomId, startsAt.toISOString(), endsAt.toISOString()]
   );
-  return rows.map((row) => toBooking(row as BookingRow));
+  const bookings = await Promise.all(
+    rows.map(async (row) => {
+      const booking = toBooking(row as BookingRow);
+      const guests = await loadGuests(db, booking.id);
+      if (guests.length > 0) booking.guests = guests;
+      return booking;
+    })
+  );
+  return bookings;
 }
 
 /**
@@ -247,6 +349,8 @@ export async function createBooking(input: BookingInput): Promise<Booking> {
     throw new ValidationError("Die Endzeit muss nach der Startzeit liegen.");
   }
   const createdBy = validateCreatedBy(input.createdBy);
+
+  const guestedInput = validateGuests(input.guests);
 
   const client: PoolClient = await pool.connect();
   try {
@@ -289,9 +393,32 @@ export async function createBooking(input: BookingInput): Promise<Booking> {
                  status`,
       [roomId, createdBy, startsAt.toISOString(), endsAt.toISOString(), status]
     );
+    const bookingId = (rows[0] as BookingRow).id;
+
+    // Schritt 5: Gäste anlegen (Anforderung 1), falls angegeben. In derselben
+    // Transaktion wie die Buchung → bei einem Fehler rollt der ganze Vorgang
+    // zurück, keine halbe Buchung mit Gästen ohne Hauptbuchung.
+    let guests: Guest[] | undefined;
+    if (guestedInput !== undefined && guestedInput.length > 0) {
+      const guestRows: Guest[] = [];
+      for (const gast of guestedInput) {
+        const gastResult = await client.query<{
+          id: number;
+          name: string;
+          email: string;
+        }>(
+          `INSERT INTO booking_guests (booking_id, name, email)
+           VALUES ($1, $2, $3)
+           RETURNING id::int AS id, name, email`,
+          [bookingId, gast.name, gast.email]
+        );
+        guestRows.push(gastResult.rows[0]);
+      }
+      guests = guestRows;
+    }
 
     await client.query("COMMIT");
-    return toBooking(rows[0] as BookingRow);
+    return toBooking(rows[0] as BookingRow, guests);
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;
@@ -328,6 +455,8 @@ export async function checkIn(
     throw new DomainNotFoundError("Buchung nicht gefunden.");
   }
   const booking = toBooking(rows[0] as BookingRow);
+  const guests = await loadGuests(pool, bookingId);
+  if (guests.length > 0) booking.guests = guests;
 
   if (booking.status === "eingecheckt") {
     return booking;

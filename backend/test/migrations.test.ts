@@ -146,6 +146,7 @@ test("DB: wiederholtes Migration-Setup auf derselben Instanz bleibt erfolgreich 
       "002_amenities.sql",
       "003_bookings.sql",
       "004_rooms_requires_approval.sql",
+      "005_booking_guests.sql",
     ]);
 
     // Zweiter Lauf über denselben connect()-Client-Pfad: Das CREATE TABLE IF
